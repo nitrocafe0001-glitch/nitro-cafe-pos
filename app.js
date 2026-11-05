@@ -63,7 +63,7 @@ if((Number(db.menuVersion)||0)<3){
 db.menu.forEach(m=>{m.emoji='';if(!m.photo)m.photo=photoFor(m.name,m.category)});
 localStorage.nitrocafepos=JSON.stringify(db);
 if(lastRemote && JSON.stringify(db)!==lastRemote)save();
-let cart=[],payment='Cash',orderType='Takeaway',page='dashboard';function save(){
+let cart=[],payment='Cash',orderType='Takeaway',page='dashboard',reportDate='';function save(){
  const snapshot=JSON.stringify(db);localStorage.nitrocafepos=snapshot;
  if(remoteApplying)return;
  lastLocalWrite=Date.now();
@@ -283,9 +283,83 @@ function previewMenuPhoto(url){if(url&&/^https?:\/\//i.test(url)){$('#edPhotoPre
 function uploadMenuPhoto(input){let file=input.files?.[0];if(!file)return;if(!file.type.startsWith('image/'))return toast('Please choose an image file.');let reader=new FileReader();reader.onload=()=>{let img=new Image();img.onload=()=>{let scale=Math.min(1,1100/Math.max(img.width,img.height)),canvas=document.createElement('canvas');canvas.width=Math.round(img.width*scale);canvas.height=Math.round(img.height*scale);canvas.getContext('2d').drawImage(img,0,0,canvas.width,canvas.height);let data=canvas.toDataURL('image/jpeg',.78);$('#edPhotoData').value=data;$('#edPhotoPreview').src=data;$('#edPhotoUrl').value=''};img.onerror=()=>toast('Could not read this image.');img.src=reader.result};reader.readAsDataURL(file)}
 function saveMenuEditor(e,id){e.preventDefault();let name=$('#edName').value.trim(),price=Number($('#edPrice').value),category=$('#edCategory').value.trim(),stock=Math.max(0,Number($('#edStock').value)||0),photo=$('#edPhotoData').value||$('#edPhotoUrl').value.trim();if(!name||!category||!Number.isFinite(price)||price<0)return toast('Please enter a valid name, category and price.');if(!photo)photo=photoFor(name,category);let old=id===null?null:db.menu.find(x=>x.id===id);if(old)Object.assign(old,{name,price,category,stock,photo});else db.menu.push({id:Date.now(),name,price,category,stock,photo,emoji:''});try{save();closeMenuEditor();render();toast(old?'Menu item updated':'Menu item added')}catch(err){toast('Could not save. Photo may be too large; upload a smaller image.')}}
 function closeMenuEditor(){$('#menuEditorRoot').innerHTML=''}
-function addMenu(existing){openMenuEditor(existing||null)}function editMenu(id){addMenu(db.menu.find(m=>m.id===id))}function deleteMenu(id){let m=db.menu.find(x=>x.id===id);if(confirm(`Delete "${m?.name}" from the menu? Existing bills will remain unchanged.`)){db.menu=db.menu.filter(x=>x.id!==id);save();render();toast('Menu item deleted')}}
+function addMenu(existing){openMenuEditor(existing||null)}function editMenu(id){addMenu(db.menu.find(m=>m.id===id))}async function deleteMenu(id) {
+  const m = db.menu.find(x => String(x.id) === String(id));
+  if (!m) return toast('Menu item not found.');
+
+  if (!confirm(`Delete "${m.name}" from the menu? Existing bills will remain unchanged. Owner email OTP is required.`)) return;
+
+  try {
+    const request = await fetch('/api/menu/delete/request-otp', {
+      method: 'POST',
+      headers: { ...authHeaders, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ itemId: String(m.id) })
+    });
+
+    const requestData = await request.json();
+    if (!request.ok) return alert(requestData.error || 'Could not send OTP.');
+
+    alert('Product deletion OTP sent to owner email.');
+    const otp = prompt('Enter the 6-digit OTP sent to owner email:');
+    if (!otp) return;
+
+    const verify = await fetch('/api/menu/delete/verify-otp', {
+      method: 'POST',
+      headers: { ...authHeaders, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ itemId: String(m.id), otp: otp.trim() })
+    });
+
+    const result = await verify.json();
+    if (!verify.ok) return alert(result.error || 'OTP verification failed.');
+
+    const latest = await fetch('/api/shared-data', { headers: authHeaders });
+    const latestData = await latest.json();
+
+    if (!latest.ok || !latestData.data) {
+      return alert('Product deleted, but refresh failed. Reload the POS.');
+    }
+
+    db = latestData.data;
+    remoteVersion = Number(latestData.version) || remoteVersion;
+    lastRemote = JSON.stringify(db);
+    localStorage.nitrocafepos = lastRemote;
+
+    render();
+    toast('Menu item deleted successfully.');
+  } catch (error) {
+    console.error(error);
+    alert('Could not complete product deletion. Check your connection.');
+  }
+}
 function inventory(){return `<section class="panel"><div class="section-head"><h2>Stock & Reorder</h2><button class="primary" onclick="addStock()">＋ Add stock item</button></div><div class="notice">Simple stock tracking is included. Ingredient-level recipe deduction and supplier purchase workflows can be added after the required stock units and recipes are defined.</div>${table(['Item','Category','On hand','Status','Update'],db.menu.map(m=>`<tr><td>${esc(m.name)}</td><td>${esc(m.category)}</td><td>${m.stock}</td><td><span class="badge ${m.stock<=5?'':'green'}">${m.stock<=5?'Low stock':'In stock'}</span></td><td><button class="btn" onclick="stockChange(${m.id})">Adjust</button></td></tr>`).join(''))}</section>`}function stockChange(id){let m=db.menu.find(x=>x.id===id),n=prompt('New stock quantity for '+m.name,m.stock);if(n!==null&&Number(n)>=0){m.stock=Number(n);save();render()}}function addStock(){let id=Number(prompt('Enter menu item ID to adjust: '+db.menu.map(m=>`${m.id}=${m.name}`).join(', ')));if(db.menu.some(m=>m.id===id))stockChange(id)}
-function customers(){return `<section class="panel"><div class="section-head"><h2>Customer Directory</h2><button class="btn" onclick="exportCsv('customers')">Export CSV</button></div>${table(['Customer','Mobile','Visits','Sales total'],db.customers.map(c=>`<tr><td>${esc(c.name)}</td><td>${esc(c.phone)}</td><td>${c.visits}</td><td>${money(c.total)}</td></tr>`).join(''))}</section>`}function reports(){let t=todayOrders(),byPay=['Cash','UPI','Card','Online','Unpaid'].map(p=>`<tr><td>${p}</td><td>${money(sum(t.filter(o=>o.payment===p)))}</td></tr>`).join(''),items={};t.forEach(o=>o.items.forEach(i=>{items[i.name]=(items[i.name]||0)+i.qty}));return `<div class="grid stats"><div class="card stat"><label>Today's Sales</label><strong>${money(sum(t))}</strong></div><div class="card stat"><label>Orders Today</label><strong>${t.length}</strong></div><div class="card stat"><label>All-time Sales</label><strong>${money(sum(db.orders))}</strong></div><div class="card stat"><label>Recorded Expenses</label><strong>${money(sum(db.expenses))}</strong></div></div><div class="grid cols"><section class="panel"><div class="section-head"><h2>Payment Summary · Today</h2><button class="btn" onclick="exportCsv('orders')">Export orders CSV</button></div>${table(['Method','Amount'],byPay)}</section><section class="panel"><h2>Popular Items · Today</h2>${table(['Item','Qty sold'],Object.entries(items).sort((a,b)=>b[1]-a[1]).map(([n,q])=>`<tr><td>${esc(n)}</td><td>${q}</td></tr>`).join(''))}</section></div><section class="panel" style="margin-top:16px"><div class="section-head"><h2>Order History</h2><button class="btn" onclick="exportCsv('orders')">Download CSV</button></div>${table(['Bill','Date','Customer','Type','Payment','Status','Total','Receipt'],db.orders.slice().reverse().map(o=>`<tr><td>${esc(o.bill)}</td><td>${esc(new Date(o.date).toLocaleString())}</td><td>${esc(o.customer||'Walk-in')}<br><small>${esc(o.phone||'')}</small></td><td>${esc(o.type)}</td><td>${esc(o.payment)}</td><td>${esc(o.status)}</td><td>${money(o.total)}</td><td><button class="btn" onclick="printBill(${o.id})">Print</button> <button class="btn" onclick="sendBill(${o.id})">WhatsApp bill</button></td></tr>`).join(''))}</section>`}function sales(){return `<section class="panel"><div class="section-head"><div><h2>Sales Management</h2><small>Bill edits and deletions are kept separate from normal billing.</small></div><button class="btn" onclick="go('reports')">Back to reports</button></div>${table(['Bill','Date','Customer','Payment','Total','Actions'],db.orders.slice().reverse().map(o=>`<tr><td><b>${esc(o.bill)}</b></td><td>${esc(new Date(o.date).toLocaleString())}</td><td>${esc(o.customer||'Walk-in')}</td><td>${esc(o.payment)}</td><td>${money(o.total)}</td><td>${(o.status === 'Cancelled' || o.cancelledAt) ? '<span class="muted">Cancelled</span>' : '<div class="actions"><button class="btn" onclick="editSale(' + o.id + ')">Edit sale</button><button class="btn danger" onclick="deleteSale(' + o.id + ')">Delete sale</button></div>'}</td></tr>`).join(''))}</section>`}
+function customers(){return `<section class="panel"><div class="section-head"><h2>Customer Directory</h2><button class="btn" onclick="exportCsv('customers')">Export CSV</button></div>${table(['Customer','Mobile','Visits','Sales total'],db.customers.map(c=>`<tr><td>${esc(c.name)}</td><td>${esc(c.phone)}</td><td>${c.visits}</td><td>${money(c.total)}</td></tr>`).join(''))}</section>`}function setReportDate(value){reportDate=value||today();render()}
+function reports(){
+  if(!reportDate)reportDate=today();
+  const selectedDate=reportDate;
+  const t=db.orders.filter(o=>localDateKey(o.date)===selectedDate&&(o.status||'').toLowerCase()!=='cancelled'&&!o.cancelledAt);
+  const collected=t.filter(o=>o.payment!=='Unpaid');
+  const collection=sum(collected);
+  const unpaid=sum(t.filter(o=>o.payment==='Unpaid'));
+  const byPay=['Cash','UPI','Card','Online','Unpaid'].map(p=>`<tr><td>${p}</td><td>${money(sum(t.filter(o=>o.payment===p)))}</td></tr>`).join('');
+  const items={};
+  t.forEach(o=>(o.items||[]).forEach(i=>{
+    const key=i.name||'Unknown item';
+    items[key]=(items[key]||0)+Number(i.qty||0);
+  }));
+  const itemRows=Object.entries(items).sort((a,b)=>b[1]-a[1]).map(([n,q])=>`<tr><td>${esc(n)}</td><td>${q}</td><td>${q}</td></tr>`).join('');
+  return `<section class="panel"><div class="section-head"><div><h2>Daily Reports</h2><small>Select a date to view collection and stock reduction</small></div><input type="date" value="${esc(selectedDate)}" onchange="setReportDate(this.value)" style="max-width:190px"></div></section>
+  <div class="grid stats">
+    <div class="card stat"><label>Total Collection</label><strong>${money(collection)}</strong></div>
+    <div class="card stat"><label>Unpaid Amount</label><strong>${money(unpaid)}</strong></div>
+    <div class="card stat"><label>Orders</label><strong>${t.length}</strong></div>
+    <div class="card stat"><label>All-time Sales</label><strong>${money(sum(db.orders.filter(o=>(o.status||'').toLowerCase()!=='cancelled'&&!o.cancelledAt)))}</strong></div>
+  </div>
+  <div class="grid cols">
+    <section class="panel"><h2>Daily Collection · ${esc(selectedDate)}</h2>${table(['Payment Method','Amount'],byPay)}</section>
+    <section class="panel"><h2>Daily Item & Stock Report</h2>${table(['Item','Qty Sold','Stock Reduced'],itemRows)}</section>
+  </div>
+  <section class="panel" style="margin-top:16px"><div class="section-head"><h2>Order History</h2><button class="btn" onclick="exportCsv('orders')">Download CSV</button></div>${table(['Bill','Date','Customer','Type','Payment','Status','Total','Receipt'],db.orders.slice().reverse().map(o=>`<tr><td>${esc(o.bill)}</td><td>${esc(new Date(o.date).toLocaleString())}</td><td>${esc(o.customer||'Walk-in')}<br><small>${esc(o.phone||'')}</small></td><td>${esc(o.type)}</td><td>${esc(o.payment)}</td><td>${esc(o.status)}</td><td>${money(o.total)}</td><td><button class="btn" onclick="printBill(${o.id})">Print</button> <button class="btn" onclick="sendBill(${o.id})">WhatsApp bill</button></td></tr>`).join(''))}</section>`;
+}function sales(){return `<section class="panel"><div class="section-head"><div><h2>Sales Management</h2><small>Bill edits and deletions are kept separate from normal billing.</small></div><button class="btn" onclick="go('reports')">Back to reports</button></div>${table(['Bill','Date','Customer','Payment','Total','Actions'],db.orders.slice().reverse().map(o=>`<tr><td><b>${esc(o.bill)}</b></td><td>${esc(new Date(o.date).toLocaleString())}</td><td>${esc(o.customer||'Walk-in')}</td><td>${esc(o.payment)}</td><td>${money(o.total)}</td><td>${(o.status === 'Cancelled' || o.cancelledAt) ? '<span class="muted">Cancelled</span>' : '<div class="actions"><button class="btn" onclick="editSale(' + o.id + ')">Edit sale</button><button class="btn danger" onclick="deleteSale(' + o.id + ')">Delete sale</button></div>'}</td></tr>`).join(''))}</section>`}
 function editSale(id){
  const o=db.orders.find(x=>x.id===id);if(!o)return;
  const customer=prompt('Customer name',o.customer||'');if(customer===null)return;

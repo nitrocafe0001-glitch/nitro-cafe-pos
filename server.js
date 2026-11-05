@@ -286,6 +286,99 @@ app.post('/api/delete/verify-otp', auth, otpLimiter, async (req, res) => {
   }
 });
 
+app.post('/api/menu/delete/request-otp', auth, otpLimiter, async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database not configured.' });
+
+  let insertedOtpId = null;
+
+  try {
+    const itemId = String(req.body?.itemId || '').trim();
+    const scope = 'MENU:' + itemId;
+    const ownerEmail = process.env.OWNER_EMAIL;
+    const apiKey = process.env.RESEND_API_KEY;
+
+    if (!itemId) return res.status(400).json({ error: 'Product ID required.' });
+    if (!ownerEmail || !apiKey) return res.status(503).json({ error: 'Email OTP is not configured.' });
+
+    const { data: record, error: readError } = await supabase
+      .from('pos_shared_data').select('data').eq('id', 1).maybeSingle();
+
+    if (readError) throw readError;
+
+    const item = record?.data?.menu?.find(x => String(x.id) === itemId);
+    if (!item) return res.status(404).json({ error: 'Product not found.' });
+
+    const otp = crypto.randomInt(100000, 1000000).toString();
+    const otpHash = makeOtpHash(scope, otp);
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+
+    const { data: inserted, error: insertError } = await supabase
+      .from('pos_delete_otps')
+      .insert({ bill_id: scope, otp_hash: otpHash, expires_at: expiresAt })
+      .select('id').single();
+
+    if (insertError) throw insertError;
+    insertedOtpId = inserted.id;
+
+    const { error: invalidateError } = await supabase
+      .from('pos_delete_otps').update({ used_at: new Date().toISOString() })
+      .eq('bill_id', scope).is('used_at', null).neq('id', insertedOtpId);
+
+    if (invalidateError) throw invalidateError;
+
+    const mail = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        from: 'NITRO CAFE <onboarding@resend.dev>',
+        to: [ownerEmail],
+        subject: 'NITRO CAFE - Product deletion OTP',
+        text: `Your OTP to delete "${item.name}" is ${otp}. It expires in 5 minutes.`
+      }),
+      signal: AbortSignal.timeout(15000)
+    });
+
+    if (!mail.ok) throw new Error('Could not send OTP email.');
+
+    return res.json({ ok: true, message: 'OTP sent to owner email.' });
+  } catch (error) {
+    console.error('Product OTP request error:', error);
+    if (insertedOtpId !== null) {
+      await supabase.from('pos_delete_otps')
+        .update({ used_at: new Date().toISOString() })
+        .eq('id', insertedOtpId).is('used_at', null);
+    }
+    return res.status(500).json({ error: 'Could not send product deletion OTP.' });
+  }
+});
+
+app.post('/api/menu/delete/verify-otp', auth, otpLimiter, async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database not configured.' });
+
+  try {
+    const itemId = String(req.body?.itemId || '').trim();
+    const otp = String(req.body?.otp || '').trim();
+
+    if (!itemId || !/^\d{6}$/.test(otp)) {
+      return res.status(400).json({ error: 'Enter the 6-digit OTP.' });
+    }
+
+    const { data, error } = await supabase.rpc('pos_delete_menu_item', {
+      p_item_id: itemId,
+      p_otp_hash: makeOtpHash('MENU:' + itemId, otp)
+    });
+
+    if (error) {
+      console.error('Product OTP verification error:', error);
+      return res.status(400).json({ error: 'Invalid, expired, or already used OTP.' });
+    }
+
+    return res.json({ ok: true, result: data });
+  } catch (error) {
+    console.error('Product deletion error:', error);
+    return res.status(500).json({ error: 'Could not delete product.' });
+  }
+});
 app.post('/api/checkout', auth, async (req, res) => {
   if (!supabase) {
     return res.status(503).json({
