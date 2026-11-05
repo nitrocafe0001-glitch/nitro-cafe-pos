@@ -468,6 +468,92 @@ app.get('/api/shared-data', auth, async (_req, res) => {
   }
 });
 
+const settingsOtpTokens = new Map();
+const settingsOtpLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 5, standardHeaders: 'draft-7', legacyHeaders: false });
+
+app.post('/api/settings/request-otp', auth, settingsOtpLimiter, async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database not configured.' });
+  let insertedOtpId = null;
+  try {
+    const ownerEmail = process.env.OWNER_EMAIL;
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!ownerEmail || !apiKey) return res.status(503).json({ error: 'Email OTP is not configured.' });
+
+    const scope = 'SETTINGS';
+    const otp = crypto.randomInt(100000, 1000000).toString();
+    const otpHash = makeOtpHash(scope, otp);
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+
+    const { data: inserted, error: insertError } = await supabase
+      .from('pos_delete_otps')
+      .insert({ bill_id: scope, otp_hash: otpHash, expires_at: expiresAt })
+      .select('id').single();
+    if (insertError) throw insertError;
+    insertedOtpId = inserted.id;
+
+    const { error: invalidateError } = await supabase
+      .from('pos_delete_otps').update({ used_at: new Date().toISOString() })
+      .eq('bill_id', scope).is('used_at', null).neq('id', insertedOtpId);
+    if (invalidateError) throw invalidateError;
+
+    const mail = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        from: 'NITRO CAFE <onboarding@resend.dev>',
+        to: [ownerEmail],
+        subject: 'NITRO CAFE - Settings OTP',
+        text: `Your Settings verification OTP is ${otp}. It expires in 5 minutes.`
+      }),
+      signal: AbortSignal.timeout(15000)
+    });
+    if (!mail.ok) throw new Error('Could not send OTP email.');
+    return res.json({ ok: true, message: 'OTP sent to owner email.' });
+  } catch (error) {
+    console.error('Settings OTP request error:', error);
+    if (insertedOtpId !== null) {
+      await supabase.from('pos_delete_otps').update({ used_at: new Date().toISOString() }).eq('id', insertedOtpId).is('used_at', null);
+    }
+    return res.status(500).json({ error: 'Could not send Settings OTP.' });
+  }
+});
+
+app.post('/api/settings/verify-otp', auth, settingsOtpLimiter, async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database not configured.' });
+  try {
+    const otp = String(req.body?.otp || '').trim();
+    if (!/^\d{6}$/.test(otp)) return res.status(400).json({ error: 'Enter the 6-digit OTP.' });
+
+    const { data: record, error } = await supabase.from('pos_delete_otps')
+      .select('id')
+      .eq('bill_id', 'SETTINGS')
+      .eq('otp_hash', makeOtpHash('SETTINGS', otp))
+      .is('used_at', null)
+      .gt('expires_at', new Date().toISOString())
+      .limit(1)
+      .maybeSingle();
+
+    if (error) throw error;
+    if (!record) return res.status(400).json({ error: 'Invalid, expired, or already used OTP.' });
+
+    const { data: used, error: useError } = await supabase.from('pos_delete_otps')
+      .update({ used_at: new Date().toISOString() })
+      .eq('id', record.id)
+      .is('used_at', null)
+      .select('id')
+      .maybeSingle();
+
+    if (useError) throw useError;
+    if (!used) return res.status(400).json({ error: 'OTP has already been used.' });
+
+    const settingsToken = crypto.randomBytes(32).toString('hex');
+    settingsOtpTokens.set(settingsToken, Date.now() + 5 * 60 * 1000);
+    return res.json({ ok: true, settingsToken });
+  } catch (error) {
+    console.error('Settings OTP verification error:', error);
+    return res.status(500).json({ error: 'Could not verify Settings OTP.' });
+  }
+});
 app.put('/api/shared-data', auth, async (req, res) => {
   if (!supabase) {
     return res.status(503).json({
@@ -498,6 +584,29 @@ app.put('/api/shared-data', auth, async (req, res) => {
   }
 
   try {
+    const { data: currentRecord, error: readError } = await supabase
+      .from('pos_shared_data')
+      .select('data')
+      .eq('id', 1)
+      .maybeSingle();
+
+    if (readError) throw readError;
+
+    const currentSettings = currentRecord?.data?.settings || {};
+    const incomingSettings = d.settings || {};
+    const settingsChanged = JSON.stringify(currentSettings) !== JSON.stringify(incomingSettings);
+
+    if (settingsChanged) {
+      const settingsToken = String(req.headers['x-settings-otp-token'] || '');
+      const tokenExpiry = settingsOtpTokens.get(settingsToken);
+
+      if (!settingsToken || !tokenExpiry || tokenExpiry < Date.now()) {
+        return res.status(403).json({ error: 'Settings change requires a fresh email OTP.' });
+      }
+
+      settingsOtpTokens.delete(settingsToken);
+    }
+
     const { data: result, error } = await supabase.rpc(
       'pos_save_shared_data',
       {
