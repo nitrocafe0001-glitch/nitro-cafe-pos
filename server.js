@@ -1,3 +1,4 @@
+
 require('dotenv').config();
 
 const express = require('express');
@@ -5,8 +6,10 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const { createClient } = require('@supabase/supabase-js');
 const path = require('path');
+const crypto = require('crypto');
 
 const app = express();
+app.set('trust proxy', 1);
 const PORT = Number(process.env.PORT || 3000);
 const ROOT = __dirname;
 
@@ -40,7 +43,7 @@ function configured() {
 app.get('/api/health', (_req, res) => {
   res.json({
     ok: true,
-    service: 'NITRO CAFÉ POS',
+    service: 'NITRO CAFÃ‰ POS',
     sharedSync: true,
     passwordConfigured: configured(),
     databaseConfigured: !!supabase
@@ -79,6 +82,271 @@ function auth(req, res, next) {
   next();
 }
 
+function makeOtpHash(billId, otp) {
+  return crypto
+    .createHmac('sha256', process.env.POS_SHARED_PASSWORD)
+    .update(`${billId}:${otp}`)
+    .digest('hex');
+}
+
+const otpLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 5,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false
+});
+
+app.post('/api/delete/request-otp', auth, otpLimiter, async (req, res) => {
+  if (!supabase) {
+    return res.status(503).json({
+      error: 'Supabase database is not configured.'
+    });
+  }
+
+  let insertedOtpId = null;
+
+  try {
+    const billId = String(req.body?.billId || '').trim();
+    const ownerEmail = process.env.OWNER_EMAIL;
+    const apiKey = process.env.RESEND_API_KEY;
+
+    if (!billId) {
+      return res.status(400).json({
+        error: 'Bill ID is required.'
+      });
+    }
+
+    if (!ownerEmail || !apiKey) {
+      return res.status(503).json({
+        error: 'Email OTP is not configured.'
+      });
+    }
+
+    const { data: record, error: readError } = await supabase
+      .from('pos_shared_data')
+      .select('data')
+      .eq('id', 1)
+      .maybeSingle();
+
+    if (readError) throw readError;
+
+    const order = record?.data?.orders?.find(
+      item => String(item.bill) === billId
+    );
+
+    if (!order || order.status === 'Cancelled' || order.cancelledAt) {
+      return res.status(404).json({
+        error: 'Active bill not found.'
+      });
+    }
+
+    const otp = crypto.randomInt(100000, 1000000).toString();
+    const otpHash = makeOtpHash(billId, otp);
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+
+    const { data: insertedOtp, error: insertError } = await supabase
+      .from('pos_delete_otps')
+      .insert({
+        bill_id: billId,
+        otp_hash: otpHash,
+        expires_at: expiresAt
+      })
+      .select('id')
+      .single();
+
+    if (insertError) throw insertError;
+
+    insertedOtpId = insertedOtp.id;
+
+    const mailResponse = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        from: 'NITRO CAFÃ‰ <onboarding@resend.dev>',
+        to: [ownerEmail],
+        subject: `NITRO CAFÃ‰ - Bill ${billId} cancellation OTP`,
+        text: `Your OTP to cancel bill ${billId} is ${otp}. It expires in 5 minutes. Do not share this code.`
+      }),
+      signal: AbortSignal.timeout(15000)
+    });
+
+    if (!mailResponse.ok) {
+      console.error('Resend email failed:', mailResponse.status);
+
+      const { error: cleanupError } = await supabase
+        .from('pos_delete_otps')
+        .update({ used_at: new Date().toISOString() })
+        .eq('id', insertedOtpId)
+        .is('used_at', null);
+
+      if (cleanupError) {
+        console.error('OTP cleanup error:', cleanupError);
+      }
+
+      return res.status(502).json({
+        error: 'Could not send OTP email.'
+      });
+    }
+
+    // Invalidate all previous unused OTPs for this bill.
+    const { error: invalidateError } = await supabase
+      .from('pos_delete_otps')
+      .update({ used_at: new Date().toISOString() })
+      .eq('bill_id', billId)
+      .is('used_at', null)
+      .neq('id', insertedOtpId);
+
+    if (invalidateError) {
+      console.error('Previous OTP invalidation error:', invalidateError);
+
+      // Do not leave the newly issued OTP usable if invalidation failed.
+      const { error: cleanupError } = await supabase
+        .from('pos_delete_otps')
+        .update({ used_at: new Date().toISOString() })
+        .eq('id', insertedOtpId)
+        .is('used_at', null);
+
+      if (cleanupError) {
+        console.error('OTP cleanup error:', cleanupError);
+      }
+
+      return res.status(500).json({
+        error: 'Could not safely issue a new OTP. Please request again.'
+      });
+    }
+
+    return res.json({
+      ok: true,
+      message: 'OTP sent to owner email.'
+    });
+  } catch (error) {
+    console.error('OTP request error:', error);
+
+    if (supabase && insertedOtpId !== null) {
+      const { error: cleanupError } = await supabase
+        .from('pos_delete_otps')
+        .update({ used_at: new Date().toISOString() })
+        .eq('id', insertedOtpId)
+        .is('used_at', null);
+
+      if (cleanupError) {
+        console.error('OTP cleanup error:', cleanupError);
+      }
+    }
+
+    return res.status(500).json({
+      error: 'Could not request OTP.'
+    });
+  }
+});
+
+app.post('/api/delete/verify-otp', auth, otpLimiter, async (req, res) => {
+  if (!supabase) {
+    return res.status(503).json({
+      error: 'Supabase database is not configured.'
+    });
+  }
+
+  try {
+    const billId = String(req.body?.billId || '').trim();
+    const otp = String(req.body?.otp || '').trim();
+
+    if (!billId || !/^\d{6}$/.test(otp)) {
+      return res.status(400).json({
+        error: 'Enter the 6-digit OTP.'
+      });
+    }
+
+    const otpHash = makeOtpHash(billId, otp);
+
+    const { data, error } = await supabase.rpc('pos_cancel_bill', {
+      p_bill_id: billId,
+      p_otp_hash: otpHash
+    });
+
+    if (error) {
+      console.error('OTP verification database error:', error);
+      return res.status(400).json({
+        error: 'Invalid, expired, or already used OTP.'
+      });
+    }
+
+    return res.json({
+      ok: true,
+      result: data
+    });
+  } catch (error) {
+    console.error('OTP verification error:', error);
+    return res.status(500).json({
+      error: 'Could not verify OTP.'
+    });
+  }
+});
+
+app.post('/api/checkout', auth, async (req, res) => {
+  if (!supabase) {
+    return res.status(503).json({
+      error: 'Supabase database is not configured.'
+    });
+  }
+
+  const order = req.body?.order;
+
+  if (
+    !order ||
+    !order.bill ||
+    !Array.isArray(order.items) ||
+    order.items.length === 0
+  ) {
+    return res.status(400).json({
+      error: 'Invalid order.'
+    });
+  }
+
+  try {
+    const { data, error } = await supabase.rpc(
+      'pos_checkout_order',
+      { p_order: order }
+    );
+
+    if (error) {
+      console.error('Checkout error:', error);
+      return res.status(400).json({
+        error: error.message.includes('Insufficient stock')
+          ? 'Insufficient stock. Please refresh the POS and try again.'
+          : 'Could not complete order. Please refresh and try again.'
+      });
+    }
+
+    if (
+      !data ||
+      !data.data ||
+      !Array.isArray(data.data.menu) ||
+      !Array.isArray(data.data.orders) ||
+      data.version === undefined
+    ) {
+      console.error('Unexpected checkout RPC response:', data);
+      return res.status(500).json({
+        error: 'Unexpected checkout response. Please contact support.'
+      });
+    }
+
+    return res.json({
+      ok: true,
+      data: data.data,
+      version: data.version
+    });
+  } catch (error) {
+    console.error('Checkout API error:', error);
+    return res.status(500).json({
+      error: 'Could not complete order.'
+    });
+  }
+});
+
 app.get('/api/shared-data', auth, async (_req, res) => {
   if (!supabase) {
     return res.status(503).json({
@@ -86,20 +354,25 @@ app.get('/api/shared-data', auth, async (_req, res) => {
     });
   }
 
-  const { data, error } = await supabase
-    .from('pos_shared_data')
-    .select('data')
-    .eq('id', 1)
-    .maybeSingle();
+  try {
+    const { data, error } = await supabase
+      .from('pos_shared_data')
+      .select('data, version')
+      .eq('id', 1)
+      .maybeSingle();
 
-  if (error) {
-    console.error(error);
+    if (error) throw error;
+
+    return res.json({
+      data: data?.data || null,
+      version: Number(data?.version || 1)
+    });
+  } catch (error) {
+    console.error('Shared data read error:', error);
     return res.status(500).json({
       error: 'Could not read shared data.'
     });
   }
-
-  res.json({ data: data?.data || null });
 });
 
 app.put('/api/shared-data', auth, async (req, res) => {
@@ -110,32 +383,82 @@ app.put('/api/shared-data', auth, async (req, res) => {
   }
 
   const d = req.body?.data;
+  const expectedVersion = Number(req.body?.expectedVersion);
 
-  if (!d || !Array.isArray(d.menu) || !Array.isArray(d.orders)) {
+  if (
+    !d ||
+    !Array.isArray(d.menu) ||
+    !Array.isArray(d.orders)
+  ) {
     return res.status(400).json({
       error: 'Invalid POS data.'
     });
   }
 
-  const { error } = await supabase
-    .from('pos_shared_data')
-    .upsert({
-      id: 1,
-      data: d,
-      updated_at: new Date().toISOString()
-    }, { onConflict: 'id' });
+  if (
+    !Number.isSafeInteger(expectedVersion) ||
+    expectedVersion < 1
+  ) {
+    return res.status(400).json({
+      error: 'A valid expected version is required. Please refresh the POS.'
+    });
+  }
 
-  if (error) {
-    console.error(error);
+  try {
+    const { data: result, error } = await supabase.rpc(
+      'pos_save_shared_data',
+      {
+        p_expected_version: expectedVersion,
+        p_data: d
+      }
+    );
+
+    if (error) {
+      console.error('Shared data save RPC error:', error);
+
+      if (
+        error.message?.includes('Bills cannot be deleted directly') ||
+        error.message?.includes('Owner OTP is required') ||
+        error.message?.includes('Cancelled bill cannot be reactivated')
+      ) {
+        return res.status(403).json({
+          error: error.message
+        });
+      }
+
+      return res.status(500).json({
+        error: 'Could not save shared data.'
+      });
+    }
+
+    if (result?.conflict) {
+      return res.status(409).json({
+        ok: false,
+        conflict: true,
+        version: result.version,
+        data: result.data,
+        error: 'Another device updated the POS. Latest data has been returned.'
+      });
+    }
+
+    if (!result?.ok) {
+      return res.status(500).json({
+        error: 'Could not save shared data.'
+      });
+    }
+
+    return res.json({
+      ok: true,
+      version: result.version,
+      data: result.data,
+      savedAt: Date.now()
+    });
+  } catch (error) {
+    console.error('Shared data save error:', error);
     return res.status(500).json({
       error: 'Could not save shared data.'
     });
   }
-
-  res.json({
-    ok: true,
-    savedAt: Date.now()
-  });
 });
 
 function config() {
@@ -202,12 +525,12 @@ async function sendTemplate(req, res, templateKey, kind) {
     ? [
         String(body.customerName || 'Customer'),
         String(body.billNo || 'Bill'),
-        `₹${Number(body.total || 0).toFixed(2)}`
+        `â‚¹${Number(body.total || 0).toFixed(2)}`
       ]
     : [
         String(body.customerName || 'Customer'),
         String(body.billNo || 'Order'),
-        String(body.shopName || 'NITRO CAFÉ')
+        String(body.shopName || 'NITRO CAFÃ‰')
       ];
 
   const url =
@@ -274,7 +597,7 @@ app.post('/api/whatsapp/food-ready', limiter, (req, res) =>
 );
 
 app.listen(PORT, () => {
-  console.log(`NITRO CAFÉ POS running on port ${PORT}`);
+  console.log(`NITRO CAFÃ‰ POS running on port ${PORT}`);
 
   if (!configured()) {
     console.log('Set POS_SHARED_PASSWORD in server environment.');
