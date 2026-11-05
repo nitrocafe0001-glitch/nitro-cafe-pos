@@ -1,5 +1,5 @@
 (async function(){
-const $=s=>document.querySelector(s), money=n=>'â‚¹'+Number(n||0).toFixed(2), esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const $=s=>document.querySelector(s), money=n=>'\u20B9'+Number(n||0).toFixed(2), esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const menuSeed=[
 ['Classic hotdog',99,'Hotdogs','assets/menu/01.jpg'],
 ['BBQ hotdog',110,'Hotdogs','assets/menu/02.jpg'],
