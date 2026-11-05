@@ -89,3 +89,5 @@ img{max-width:100%}button,input,select{touch-action:manipulation}.food{min-width
   .food p{font-size:12px}
   .top h1{font-size:21px!important}
 }
+
+@media screen and (min-width:761px){.sidebar{height:100vh;overflow-y:auto;overflow-x:hidden}.sidebar nav{flex-shrink:0}}
