@@ -253,6 +253,14 @@ app.post('/api/delete/verify-otp', auth, otpLimiter, async (req, res) => {
   try {
     const billId = String(req.body?.billId || '').trim();
     const otp = String(req.body?.otp || '').trim();
+    const reason = String(req.body?.reason || '').trim();
+    const allowedReasons = [
+      'Customer cancelled',
+      'Wrong order',
+      'Duplicate bill',
+      'Payment issue',
+      'Other'
+    ];
 
     if (!billId || !/^\d{6}$/.test(otp)) {
       return res.status(400).json({
@@ -260,11 +268,18 @@ app.post('/api/delete/verify-otp', auth, otpLimiter, async (req, res) => {
       });
     }
 
+    if (!allowedReasons.includes(reason)) {
+      return res.status(400).json({
+        error: 'Select a valid cancellation reason.'
+      });
+    }
+
     const otpHash = makeOtpHash(billId, otp);
 
     const { data, error } = await supabase.rpc('pos_cancel_bill', {
       p_bill_id: billId,
-      p_otp_hash: otpHash
+      p_otp_hash: otpHash,
+      p_reason: reason
     });
 
     if (error) {
