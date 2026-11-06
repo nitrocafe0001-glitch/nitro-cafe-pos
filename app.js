@@ -333,7 +333,16 @@ function filterManageMenu(){let q=($('#manageMenuSearch')?.value||'').toLowerCas
 function openMenuEditor(existing){let m=existing||null;$('#menuEditorRoot').innerHTML=`<div class="editor-backdrop" onclick="if(event.target===this)closeMenuEditor()"><section class="editor-panel"><div class="section-head"><div><h2>${m?'Edit menu item':'Add new menu item'}</h2><small>Update item details and food photo</small></div><button class="btn" onclick="closeMenuEditor()">×</button></div><form id="menuEditorForm" onsubmit="saveMenuEditor(event,${m?m.id:'null'})"><div class="formgrid"><div class="field"><label>Item name *</label><input id="edName" required maxlength="90" value="${esc(m?.name||'')}"></div><div class="field"><label>Price (\u20B9) *</label><input id="edPrice" type="number" required min="0" step=".01" value="${m?.price??''}"></div><div class="field"><label>Category *</label><input id="edCategory" list="menuCategories" required value="${esc(m?.category||'Hotdogs')}"><datalist id="menuCategories">${[...new Set([...db.menu.map(x=>x.category),'Hotdogs','Fries','Wings','Burgers','Juices','Ice Tea','Boba','Hot Drinks','Momos','Combo Offers','Sides'])].map(c=>`<option value="${esc(c)}">`).join('')}</datalist></div><div class="field"><label>Stock quantity</label><input id="edStock" type="number" min="0" step="1" value="${m?.stock??50}"></div></div><div class="field" style="margin-top:12px"><label>Photo URL (paste a direct image URL)</label><input id="edPhotoUrl" type="url" placeholder="https://\u2026" value="${esc(m?.photo||'')}" oninput="previewMenuPhoto(this.value)"></div><div class="field" style="margin-top:12px"><label>Or upload photo from your device</label><input id="edPhotoFile" type="file" accept="image/*" onchange="uploadMenuPhoto(this)"><small>Image will be resized and saved in this browser.</small></div><img id="edPhotoPreview" class="editor-preview" src="${esc(m?.photo||'food-placeholder.svg')}" alt="Food photo preview" onerror="this.src='food-placeholder.svg'"><input type="hidden" id="edPhotoData" value=""><div class="actions" style="margin-top:16px;justify-content:flex-end"><button type="button" class="btn" onclick="closeMenuEditor()">Cancel</button><button type="submit" class="primary">Save menu item</button></div></form></section></div>`}
 function previewMenuPhoto(url){if(url&&/^https?:\/\//i.test(url)){$('#edPhotoPreview').src=url;$('#edPhotoData').value=''}}
 function uploadMenuPhoto(input){let file=input.files?.[0];if(!file)return;if(!file.type.startsWith('image/'))return toast('Please choose an image file.');let reader=new FileReader();reader.onload=()=>{let img=new Image();img.onload=()=>{let scale=Math.min(1,1100/Math.max(img.width,img.height)),canvas=document.createElement('canvas');canvas.width=Math.round(img.width*scale);canvas.height=Math.round(img.height*scale);canvas.getContext('2d').drawImage(img,0,0,canvas.width,canvas.height);let data=canvas.toDataURL('image/jpeg',.78);$('#edPhotoData').value=data;$('#edPhotoPreview').src=data;$('#edPhotoUrl').value=''};img.onerror=()=>toast('Could not read this image.');img.src=reader.result};reader.readAsDataURL(file)}
-function saveMenuEditor(e,id){e.preventDefault();let name=$('#edName').value.trim(),price=Number($('#edPrice').value),category=$('#edCategory').value.trim(),stock=Math.max(0,Number($('#edStock').value)||0),photo=$('#edPhotoData').value||$('#edPhotoUrl').value.trim();if(!name||!category||!Number.isFinite(price)||price<0)return toast('Please enter a valid name, category and price.');if(!photo)photo=photoFor(name,category);let old=id===null?null:db.menu.find(x=>x.id===id);if(old)Object.assign(old,{name,price,category,stock,photo});else db.menu.push({id:Date.now(),name,price,category,stock,photo,emoji:''});try{save();closeMenuEditor();render();toast(old?'Menu item updated':'Menu item added')}catch(err){toast('Could not save. Photo may be too large; upload a smaller image.')}}
+function saveMenuEditor(e,id){
+ e.preventDefault();
+ let name=$('#edName').value.trim(),price=Number($('#edPrice').value),category=$('#edCategory').value.trim(),stock=Math.max(0,Number($('#edStock').value)||0);
+ if(!name||!category||!Number.isFinite(price)||price<0)return toast('Please enter a valid name, category and price.');
+ let old=id===null?null:db.menu.find(x=>x.id===id);
+ let photo=$('#edPhotoData').value||$('#edPhotoUrl').value.trim()||(old?.photo||'');
+ if(old)Object.assign(old,{name,price,category,stock,photo});
+ else db.menu.push({id:Date.now(),name,price,category,stock,photo,emoji:''});
+ try{save();closeMenuEditor();render();toast(old?'Menu item updated':'Menu item added')}catch(err){toast('Could not save menu item. Please try again.')}
+}
 function closeMenuEditor(){$('#menuEditorRoot').innerHTML=''}
 function addMenu(existing){openMenuEditor(existing||null)}function editMenu(id){addMenu(db.menu.find(m=>m.id===id))}async function deleteMenu(id) {
   const m = db.menu.find(x => String(x.id) === String(id));
@@ -411,8 +420,8 @@ function ingredientsPage(){
   const end=ingredientReportEnd||today();
   const ledger=db.ingredientLedger||[];
   const inRange=x=>{const d=String(x.date||'').slice(0,10);return d>=start&&d<=end};
-  const rows=db.ingredients.map(i=>`<tr><td>${esc(i.name)}</td><td>${esc(i.unit)}</td><td>${Number(i.stock||0)}</td><td><button class="btn" onclick="ingredientPurchase(${i.id})">Purchase</button></td></tr>`).join('');
-  const recipes=(db.menu||[]).map(m=>{const r=Array.isArray(m.recipe)?m.recipe:[];const names=r.map(x=>{const i=(db.ingredients||[]).find(y=>y.id===x.ingredientId);return i?esc(i.name)+` (${x.qty} ${esc(i.unit)})`:''}).filter(Boolean).join(', ');return `<tr><td>${esc(m.name)}</td><td>${names||'Not set'}</td><td><button class="btn" onclick="editIngredientRecipe(${m.id})">Set Recipe</button></td></tr>`}).join('');
+  const rows=db.ingredients.filter(i=>!i.archived).map(i=>`<tr><td>${esc(i.name)}</td><td>${esc(i.unit)}</td><td>${Number(i.stock||0)}</td><td><button class="btn" onclick="ingredientPurchase(${i.id})">Purchase</button></td><td><button class="btn" onclick="deleteIngredient(${i.id})">Delete</button></td></tr>`).join('');
+  const recipes=(db.menu||[]).map(m=>{const r=Array.isArray(m.recipe)?m.recipe:[];const names=r.map(x=>{const i=(db.ingredients||[]).find(y=>y.id===x.ingredientId);return i?esc(i.name)+` (${x.qty} ${esc(i.unit)})`:''}).filter(Boolean).join(', ');return `<tr><td>${esc(m.name)}</td><td>${names||'Not set'}</td><td><button class="btn" onclick="editIngredientRecipe(${m.id})">Set Recipe</button> ${r.length?`<button class="btn" onclick="deleteIngredientRecipe(${m.id})">Delete</button>`:''}</td></tr>`}).join('');
   const days=[];const cursor=new Date(start+'T00:00:00Z');const last=new Date(end+'T00:00:00Z');
   while(cursor<=last&&days.length<366){days.push(cursor.toISOString().slice(0,10));cursor.setUTCDate(cursor.getUTCDate()+1)}
   const daily=[];
@@ -427,8 +436,8 @@ function ingredientsPage(){
       daily.push(`<tr><td>${day}</td><td>${esc(i.name)}</td><td>${esc(i.unit)}</td><td>${opening}</td><td>${openingAdded}</td><td>${purchases}</td><td>${usage}</td><td>${reversals}</td><td>${balance}</td></tr>`);
     }
   }
-  const history=ledger.filter(inRange).slice().reverse().map(x=>`<tr><td>${esc(x.date?new Date(x.date).toLocaleString():'')}</td><td>${esc(x.name||'')}</td><td>${esc(x.type||'')}</td><td>${Number(x.qty||0)} ${esc(x.unit||'')}</td><td>${esc(x.note||'')}</td></tr>`).join('');
-  return `<section class="panel"><div class="section-head"><h2>Ingredient Stock</h2><button class="primary" onclick="addIngredient()">+ Add Ingredient</button></div><div class="table-wrap">${table(['Ingredient','Unit','Available Stock','Purchase'],rows||'<tr><td colspan="4">No ingredients added yet.</td></tr>')}</div></section><section class="panel"><h2>Menu Item Recipes</h2><p class="notice">Set ingredient quantities required for each menu item.</p><div class="table-wrap">${table(['Menu Item','Recipe','Action'],recipes||'<tr><td colspan="3">No menu items available.</td></tr>')}</div></section><section class="panel"><h2>Ingredient Daily Report</h2><div class="section-head"><label>From <input id="ingredientReportStart" type="date" value="${start}"></label><label>To <input id="ingredientReportEnd" type="date" value="${end}"></label><button class="btn" onclick="setIngredientReportDates()">Apply Dates</button><button class="primary" onclick="downloadIngredientReport()">Download Excel</button></div><p class="notice">Daily opening, purchases, usage, cancellation reversals and closing stock.</p><div class="table-wrap">${table(['Date','Ingredient','Unit','Opening','Opening Added','Purchases','Usage','Cancellation Reversal','Closing'],daily.join('')||'<tr><td colspan="9">No report data.</td></tr>')}</div></section><section class="panel"><h2>Ingredient Stock History</h2><div class="table-wrap">${table(['Date','Ingredient','Type','Quantity','Supplier / Note'],history||'<tr><td colspan="5">No stock history in this date range.</td></tr>')}</div></section>`;
+  const history=ledger.filter(inRange).slice().reverse().map(x=>`<tr><td>${esc(x.date?new Date(x.date).toLocaleString():'')}</td><td>${esc(x.name||'')}</td><td>${esc(x.type||'')}</td><td>${Number(x.qty||0)} ${esc(x.unit||'')}</td><td>${esc(x.note||'')}</td><td>${String(x.type||'').toLowerCase()==='purchase'?`<button class="btn" onclick="deleteIngredientPurchase(${x.id})">Delete</button>`:'-'}</td></tr>`).join('');
+  return `<section class="panel"><div class="section-head"><h2>Ingredient Stock</h2><button class="primary" onclick="addIngredient()">+ Add Ingredient</button></div><div class="table-wrap">${table(['Ingredient','Unit','Available Stock','Purchase','Delete'],rows||'<tr><td colspan="5">No ingredients added yet.</td></tr>')}</div></section><section class="panel"><h2>Menu Item Recipes</h2><p class="notice">Set ingredient quantities required for each menu item.</p><div class="table-wrap">${table(['Menu Item','Recipe','Action'],recipes||'<tr><td colspan="3">No menu items available.</td></tr>')}</div></section><section class="panel"><h2>Ingredient Daily Report</h2><div class="section-head"><label>From <input id="ingredientReportStart" type="date" value="${start}"></label><label>To <input id="ingredientReportEnd" type="date" value="${end}"></label><button class="btn" onclick="setIngredientReportDates()">Apply Dates</button><button class="primary" onclick="downloadIngredientReport()">Download Excel</button></div><p class="notice">Daily opening, purchases, usage, cancellation reversals and closing stock.</p><div class="table-wrap">${table(['Date','Ingredient','Unit','Opening','Opening Added','Purchases','Usage','Cancellation Reversal','Closing'],daily.join('')||'<tr><td colspan="9">No report data.</td></tr>')}</div></section><section class="panel"><h2>Ingredient Stock History</h2><div class="table-wrap">${table(['Date','Ingredient','Type','Quantity','Supplier / Note','Action'],history||'<tr><td colspan="6">No stock history in this date range.</td></tr>')}</div></section>`;
 }
 function addIngredient(){
   if(!Array.isArray(db.ingredients))db.ingredients=[];
@@ -445,18 +454,51 @@ function addIngredient(){
   if(stock>0)db.ingredientLedger.push({id:Date.now()+1,ingredientId:id,name:name.trim(),type:'Opening Stock',qty:stock,unit:unit.trim(),date:new Date().toISOString(),note:'Opening balance'});
   save();render();
 }
+function deleteIngredient(id){
+  const item=(db.ingredients||[]).find(i=>i.id===id);
+  if(!item||item.archived)return;
+  if(!confirm('Delete '+item.name+'? Its old stock history will be preserved and its recipe mapping will be removed.'))return;
+  item.archived=true;
+  (db.menu||[]).forEach(m=>{
+    if(Array.isArray(m.recipe))m.recipe=m.recipe.filter(r=>String(r.ingredientId)!==String(id));
+  });
+  save();render();toast('Ingredient deleted. Previous history preserved.');
+}
+function deleteIngredientPurchase(ledgerId){
+  const ledger=db.ingredientLedger||[];
+  const index=ledger.findIndex(x=>String(x.id)===String(ledgerId)&&String(x.type||'').toLowerCase()==='purchase');
+  if(index<0)return;
+  const entry=ledger[index];
+  const item=(db.ingredients||[]).find(i=>String(i.id)===String(entry.ingredientId));
+  if(!item)return toast('Ingredient not found. Purchase cannot be deleted.');
+  const qty=Number(entry.qty||0);
+  if(!Number.isFinite(qty)||qty<=0)return toast('Invalid purchase quantity.');
+  if(Number(item.stock||0)<qty)return toast('Not enough available stock to reverse this purchase.');
+  if(!confirm('Delete this purchase of '+qty+' '+(entry.unit||item.unit)+' for '+(entry.name||item.name)+'? Available stock will be reduced.'))return;
+  item.stock=Number(item.stock||0)-qty;
+  ledger.splice(index,1);
+  save();render();toast('Purchase deleted and stock updated.');
+}
+function deleteIngredientRecipe(menuId){
+  const menu=(db.menu||[]).find(m=>m.id===menuId);
+  if(!menu||!Array.isArray(menu.recipe)||!menu.recipe.length)return;
+  if(!confirm('Delete recipe for '+menu.name+'? The menu item and past bills will remain unchanged.'))return;
+  menu.recipe=[];
+  save();render();toast('Recipe deleted. Menu item preserved.');
+}
 function editIngredientRecipe(menuId){
   const menu=(db.menu||[]).find(m=>m.id===menuId);if(!menu)return;
-  const ingredients=db.ingredients||[];
+  const ingredients=(db.ingredients||[]).filter(i=>!i.archived);
   if(!ingredients.length)return toast('Add ingredients first');
-  const choices=ingredients.map(i=>i.id+' = '+i.name+' ('+i.unit+')').join('\n');
+  const choices=ingredients.map(i=>i.name+' ('+i.unit+')').join('\n');
   const recipe=[];
   while(true){
-    const raw=prompt('Enter ingredient ID. Leave blank to finish:\n'+choices,'');
+    const raw=prompt('Enter ingredient NAME. Leave blank to finish:\n'+choices,'');
     if(raw===null)return;
     if(!raw.trim())break;
-    const ingredient=ingredients.find(i=>String(i.id)===raw.trim());
-    if(!ingredient){alert('Invalid ingredient ID');continue}
+    const ingredient=ingredients.find(i=>i.name.trim().toLowerCase()===raw.trim().toLowerCase());
+    if(!ingredient){alert('Ingredient name not found. Please enter a name from the list.');continue}
+    if(recipe.some(r=>String(r.ingredientId)===String(ingredient.id))){alert('This ingredient is already added.');continue}
     const qty=Number(prompt('Quantity of '+ingredient.name+' per menu item ('+ingredient.unit+'):',''));
     if(!Number.isFinite(qty)||qty<=0){alert('Enter a valid quantity');continue}
     recipe.push({ingredientId:ingredient.id,qty});
@@ -703,8 +745,11 @@ window.addCart=addCart;
 window.downloadIngredientReport=downloadIngredientReport;
 window.setIngredientReportDates=setIngredientReportDates;
 window.editIngredientRecipe=editIngredientRecipe;
+window.deleteIngredientRecipe=deleteIngredientRecipe;
 window.ingredientPurchase=ingredientPurchase;
+window.deleteIngredientPurchase=deleteIngredientPurchase;
 window.addIngredient=addIngredient;
+window.deleteIngredient=deleteIngredient;
 window.addExpense=addExpense;
 window.addMenu=addMenu;
 window.addStaff=addStaff;
