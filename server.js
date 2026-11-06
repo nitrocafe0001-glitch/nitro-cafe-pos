@@ -463,23 +463,10 @@ app.post('/api/checkout', auth, async (req, res) => {
         error: 'Unexpected checkout response. Please contact support.'
       });
     }
-    const { data: latestRow, error: latestError } = await supabase
-      .from('pos_shared_data')
-      .select('data, version')
-      .eq('id', 1)
-      .single();
-
-    if (latestError || !latestRow?.data) {
-      console.error('Checkout latest data fetch error:', latestError);
-      return res.status(500).json({
-        error: 'Order saved, but latest POS data could not be loaded. Please refresh.'
-      });
-    }
-
     return res.json({
       ok: true,
-      data: latestRow.data,
-      version: latestRow.version
+      data: data.data,
+      version: data.version
     });
   } catch (error) {
     console.error('Checkout API error:', error);
