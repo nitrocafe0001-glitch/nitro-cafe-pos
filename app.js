@@ -41,7 +41,7 @@ const menuSeed=[
 ];
 const sharedPassword=sessionStorage.getItem('nitroPosPassword')||'';
 const authHeaders={'Content-Type':'application/json','x-pos-password':sharedPassword};
-const blankDb=()=>({settings:{name:'NITRO CAF├ë',address:'',phone:'',tax:0},menu:[],orders:[],expenses:[],customers:[],ingredients:[],ingredientLedger:[],staff:[{name:'Owner',role:'Administrator',phone:''}],next:1001});
+const blankDb=()=>({settings:{name:'NITRO CAF\u00C9',address:'',phone:'',tax:0},menu:[],orders:[],expenses:[],customers:[],ingredients:[],ingredientLedger:[],staff:[{name:'Owner',role:'Administrator',phone:''}],next:1001});
 let remoteApplying=false, lastRemote='', lastLocalWrite=0, writeQueue=Promise.resolve(), remoteVersion=0;
 let db=blankDb();
 try{
@@ -53,8 +53,8 @@ try{
  else {db=JSON.parse(localStorage.nitrocafepos||localStorage.jprpos||'null')||blankDb()}
 }catch(e){document.body.innerHTML='<main style="padding:30px;font:16px Arial">Cannot connect to the shared POS server. Check your internet connection and hosting setup, then reload.</main>';return}
 
-if(!db.settings)db.settings={name:'NITRO CAF├ë',address:'',phone:'',tax:0};
-if(/jpr|food cart/i.test(db.settings.name||''))db.settings.name='NITRO CAF├ë';
+if(!db.settings)db.settings={name:'NITRO CAF\u00C9',address:'',phone:'',tax:0};
+if(/jpr|food cart/i.test(db.settings.name||''))db.settings.name='NITRO CAF\u00C9';
 if((Number(db.menuVersion)||0)<3){
  const oldMenu=db.menu||[];
  db.menu=menuSeed.map((x,i)=>{const old=oldMenu.find(m=>String(m.name).toLowerCase()===x[0].toLowerCase());return {id:old?.id||i+1,name:x[0],price:x[1],category:x[2],emoji:'',photo:x[3],stock:old?.stock??50}});
@@ -700,6 +700,11 @@ function render(){let html=({dashboard,pos,kitchen,menu:menuPage,inventory,ingre
 
 // Expose handlers used by inline HTML attributes (the app is wrapped in an async IIFE).
 window.addCart=addCart;
+window.downloadIngredientReport=downloadIngredientReport;
+window.setIngredientReportDates=setIngredientReportDates;
+window.editIngredientRecipe=editIngredientRecipe;
+window.ingredientPurchase=ingredientPurchase;
+window.addIngredient=addIngredient;
 window.addExpense=addExpense;
 window.addMenu=addMenu;
 window.addStaff=addStaff;
