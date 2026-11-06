@@ -378,7 +378,7 @@ function reports(){
     <div class="card stat"><label>Daily Net Sales</label><strong>${money(sum(t))}</strong></div>
   </div>
   <div class="grid cols">
-    <section class="panel"><h2>Daily Collection ┬╖ ${esc(selectedDate)}</h2>${table(['Payment Method','Amount'],byPay)}</section>
+    <section class="panel"><h2>Daily Collection - ${esc(selectedDate)}</h2>${table(['Payment Method','Amount'],byPay)}</section>
     <section class="panel"><h2>Daily Item & Stock Report</h2>${table(['Item','Qty Sold','Stock Reduced'],itemRows)}</section>
   </div>
   <section class="panel" style="margin-top:16px"><div class="section-head"><h2>Order History</h2><button class="btn" onclick="exportCsv('orders')">Download CSV</button></div>${table(['Bill','Date','Customer','Type','Payment','Status','Total','Receipt'],t.slice().reverse().map(o=>`<tr><td>${esc(o.bill)}</td><td>${esc(new Date(o.date).toLocaleString())}</td><td>${esc(o.customer||'Walk-in')}<br><small>${esc(o.phone||'')}</small></td><td>${esc(o.type)}</td><td>${esc(o.payment)}</td><td>${esc(o.status)}</td><td>${money(o.total)}</td><td><button class="btn" onclick="printBill(${o.id})">Print</button> <button class="btn" onclick="sendBill(${o.id})">WhatsApp bill</button></td></tr>`).join(''))}</section>`;
