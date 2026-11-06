@@ -7,6 +7,7 @@ const rateLimit = require('express-rate-limit');
 const { createClient } = require('@supabase/supabase-js');
 const path = require('path');
 const crypto = require('crypto');
+const XLSX = require('xlsx');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -444,7 +445,7 @@ app.post('/api/checkout', auth, async (req, res) => {
     if (error) {
       console.error('Checkout error:', error);
       return res.status(400).json({
-        error: error.message.includes('Insufficient stock')
+        error: (error.message.includes('Insufficient stock') || error.message.includes('Insufficient ingredient stock'))
           ? 'Insufficient stock. Please refresh the POS and try again.'
           : 'Could not complete order. Please refresh and try again.'
       });
@@ -462,11 +463,23 @@ app.post('/api/checkout', auth, async (req, res) => {
         error: 'Unexpected checkout response. Please contact support.'
       });
     }
+    const { data: latestRow, error: latestError } = await supabase
+      .from('pos_shared_data')
+      .select('data, version')
+      .eq('id', 1)
+      .single();
+
+    if (latestError || !latestRow?.data) {
+      console.error('Checkout latest data fetch error:', latestError);
+      return res.status(500).json({
+        error: 'Order saved, but latest POS data could not be loaded. Please refresh.'
+      });
+    }
 
     return res.json({
       ok: true,
-      data: data.data,
-      version: data.version
+      data: latestRow.data,
+      version: latestRow.version
     });
   } catch (error) {
     console.error('Checkout API error:', error);
@@ -501,6 +514,84 @@ app.get('/api/shared-data', auth, async (_req, res) => {
     return res.status(500).json({
       error: 'Could not read shared data.'
     });
+  }
+});
+
+
+app.get('/api/ingredient-report.xlsx', auth, async (req, res) => {
+  const { start, end } = req.query;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start || '') ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(end || '') || start > end) {
+    return res.status(400).json({ error: 'Invalid report date range.' });
+  }
+  const rangeDays = (Date.parse(end + 'T00:00:00Z') - Date.parse(start + 'T00:00:00Z')) / 86400000 + 1;
+  if (rangeDays > 366) return res.status(400).json({ error: 'Maximum report range is 366 days.' });
+  if (!supabase) return res.status(503).json({ error: 'Database is not configured.' });
+
+  try {
+    const { data: record, error } = await supabase
+      .from('pos_shared_data').select('data').eq('id', 1).maybeSingle();
+    if (error) throw error;
+
+    const shared = record?.data || {};
+    const ingredients = Array.isArray(shared.ingredients) ? shared.ingredients : [];
+    const ledger = Array.isArray(shared.ingredientLedger) ? shared.ingredientLedger : [];
+    const movement = entry => {
+      const type = String(entry.type || '').toLowerCase();
+      const qty = Number(entry.qty || 0);
+      if (type.includes('usage')) return -qty;
+      if (type.includes('purchase') || type.includes('opening') ||
+          type.includes('reversal')) return qty;
+      return 0;
+    };
+
+    const days = [];
+    const cursor = new Date(start + 'T00:00:00Z');
+    const last = new Date(end + 'T00:00:00Z');
+    while (cursor <= last) {
+      days.push(cursor.toISOString().slice(0, 10));
+      cursor.setUTCDate(cursor.getUTCDate() + 1);
+    }
+
+    const rows = [[
+      'Date', 'Ingredient', 'Unit', 'Opening Stock', 'Opening Stock Added',
+      'Purchases', 'Usage', 'Cancellation Reversal', 'Closing Stock'
+    ]];
+
+    for (const ingredient of ingredients) {
+      const relevant = ledger.filter(x =>
+        String(x.ingredientId) === String(ingredient.id) &&
+        String(x.date || '').slice(0, 10) >= start
+      );
+      let balance = Number(ingredient.stock || 0) -
+        relevant.reduce((sum, entry) => sum + movement(entry), 0);
+
+      for (const day of days) {
+        const entries = relevant.filter(x => String(x.date || '').slice(0, 10) === day);
+        const total = type => entries
+          .filter(x => String(x.type || '').toLowerCase().includes(type))
+          .reduce((sum, x) => sum + Number(x.qty || 0), 0);
+        const opening = balance;
+        const openingAdded = total('opening');
+        const purchases = total('purchase');
+        const usage = total('usage');
+        const reversals = total('reversal');
+        balance = opening + openingAdded + purchases - usage + reversals;
+        rows.push([day, ingredient.name, ingredient.unit, opening, openingAdded,
+          purchases, usage, reversals, balance]);
+      }
+    }
+
+    const workbook = XLSX.utils.book_new();
+    const sheet = XLSX.utils.aoa_to_sheet(rows);
+    XLSX.utils.book_append_sheet(workbook, sheet, 'Ingredient Daily Report');
+    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="ingredient-report-${start}-to-${end}.xlsx"`);
+    return res.send(buffer);
+  } catch (error) {
+    console.error('Ingredient report export error:', error);
+    return res.status(500).json({ error: 'Could not export ingredient report.' });
   }
 });
 

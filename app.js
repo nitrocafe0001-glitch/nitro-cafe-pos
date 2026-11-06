@@ -41,7 +41,7 @@ const menuSeed=[
 ];
 const sharedPassword=sessionStorage.getItem('nitroPosPassword')||'';
 const authHeaders={'Content-Type':'application/json','x-pos-password':sharedPassword};
-const blankDb=()=>({settings:{name:'NITRO CAF├ë',address:'',phone:'',tax:0},menu:[],orders:[],expenses:[],customers:[],staff:[{name:'Owner',role:'Administrator',phone:''}],next:1001});
+const blankDb=()=>({settings:{name:'NITRO CAF├ë',address:'',phone:'',tax:0},menu:[],orders:[],expenses:[],customers:[],ingredients:[],ingredientLedger:[],staff:[{name:'Owner',role:'Administrator',phone:''}],next:1001});
 let remoteApplying=false, lastRemote='', lastLocalWrite=0, writeQueue=Promise.resolve(), remoteVersion=0;
 let db=blankDb();
 try{
@@ -89,7 +89,7 @@ let settingsUnlocked=false,pendingSettingsToken='';let cart=[],payment='Cash',or
   return result.settingsToken;
  }catch(e){toast('OTP request failed. Check connection.');return null}
 }
-async function go(p){if(p==='settings'&&!settingsUnlocked){if(!confirm('Security Warning: Opening Restaurant Settings requires Owner Email OTP verification. Continue?'))return;const token=await requestSettingsOtp();if(!token)return;settingsUnlocked=true}if(p!=='settings')settingsUnlocked=false;page=p;document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('active',b.dataset.page===p));$('#pageTitle').textContent=({dashboard:'Dashboard',pos:'POS / Billing',kitchen:'Kitchen Order Management',menu:'Menu Management',inventory:'Inventory & Stock',customers:'Customer Management',reports:'Sales Reports',sales:'Sales Management',expenses:'Expense Management',staff:'Staff & Roles',settings:'Restaurant Settings',cancelled:'Cancelled Bills'})[p];render()};$('#nav').addEventListener('click',e=>{let b=e.target.closest('[data-page]');if(b)go(b.dataset.page)});
+async function go(p){if(p==='settings'&&!settingsUnlocked){if(!confirm('Security Warning: Opening Restaurant Settings requires Owner Email OTP verification. Continue?'))return;const token=await requestSettingsOtp();if(!token)return;settingsUnlocked=true}if(p!=='settings')settingsUnlocked=false;page=p;document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('active',b.dataset.page===p));$('#pageTitle').textContent=({dashboard:'Dashboard',pos:'POS / Billing',kitchen:'Kitchen Order Management',menu:'Menu Management',inventory:'Inventory & Stock',ingredients:'Ingredient Stock',customers:'Customer Management',reports:'Sales Reports',sales:'Sales Management',expenses:'Expense Management',staff:'Staff & Roles',settings:'Restaurant Settings',cancelled:'Cancelled Bills'})[p];render()};$('#nav').addEventListener('click',e=>{let b=e.target.closest('[data-page]');if(b)go(b.dataset.page)});
 function localDateKey(value){const d=new Date(value);if(isNaN(d.getTime()))return '';const year=d.getFullYear();const month=String(d.getMonth()+1).padStart(2,'0');const day=String(d.getDate()).padStart(2,'0');return `${year}-${month}-${day}`}
 function today(){return localDateKey(new Date())}
 function todayOrders(){return db.orders.filter(o=>localDateKey(o.date)===today()&&(o.status||'').toLowerCase()!=='cancelled'&&!o.cancelledAt)}
@@ -101,11 +101,14 @@ let category='All';function setCat(c){category=c;renderMenuCards()}function phot
   $('#menuCards').innerHTML = db.menu
     .filter(m => (category === 'All' || m.category === category) && m.name.toLowerCase().includes(q))
     .map(m => {
-      const soldOut = Number(m.stock) <= 0;
+      const ingredientCheck = ingredientStockCheck(m,1);
+      const menuSoldOut = Number(m.stock) <= 0;
+      const ingredientOut = !ingredientCheck.ok;
+      const soldOut = menuSoldOut || ingredientOut;
       return `<button class="food" ${soldOut ? 'disabled' : ''} onclick="addCart(${m.id})">
         <img class="food-photo" src="${esc(m.photo || photoFor(m.name, m.category))}" alt="${esc(m.name)}" loading="lazy" onerror="this.onerror=null;this.src='food-placeholder.svg'">
         <b>${esc(m.name)}</b><small>${esc(m.category)}</small>
-        <p><span>${money(m.price)}</span>${soldOut ? 'SOLD OUT' : ''}</p>
+        <p><span>${money(m.price)}</span>${menuSoldOut ? 'SOLD OUT' : ingredientOut ? 'OUT OF STOCK' : ''}</p>
       </button>`;
     }).join('') || '<p class="empty">No menu items</p>';
   updateCart();
@@ -143,6 +146,10 @@ function changeQty(id, delta) {
   if (nextQty > 0 && (!menuItem || nextQty > Number(menuItem.stock || 0))) {
     return toast(`Only ${menuItem?.stock || 0} available`);
   }
+  if(nextQty>0){
+    const ingredientCheck=ingredientStockCheck(menuItem,nextQty);
+    if(!ingredientCheck.ok)return toast(menuItem.name+' OUT OF STOCK: '+ingredientCheck.message);
+  }
 
   item.qty = nextQty;
   cart = cart.filter(i => i.qty > 0);
@@ -157,7 +164,10 @@ function renderMenuCards() {
       m.name.toLowerCase().includes(q)
     )
     .map(m => {
-      const soldOut = Number(m.stock) <= 0;
+      const ingredientCheck = ingredientStockCheck(m,1);
+      const menuSoldOut = Number(m.stock) <= 0;
+      const ingredientOut = !ingredientCheck.ok;
+      const soldOut = menuSoldOut || ingredientOut;
 
       return `
         <button
@@ -175,13 +185,30 @@ function renderMenuCards() {
           <p>
             <span>${money(m.price)}</span>
             ${soldOut
-              ? '<strong style="color:#dc2626">SOLD OUT</strong>'
+              ? menuSoldOut ? '<strong style="color:#dc2626">SOLD OUT</strong>' : '<strong style="color:#dc2626">OUT OF STOCK</strong>'
               : ''}
           </p>
         </button>`;
     }).join('') || '<p class="empty">No menu items</p>';
 
   updateCart();
+}
+function ingredientStockCheck(menuItem, quantity=1){
+  const recipe=Array.isArray(menuItem.recipe)?menuItem.recipe:[];
+  const requiredByIngredient=new Map();
+  for(const part of recipe){
+    const key=String(part.ingredientId);
+    const required=Number(part.qty||0)*quantity;
+    if(!Number.isFinite(required)||required<=0)return {ok:false,message:'Invalid recipe quantity'};
+    requiredByIngredient.set(key,(requiredByIngredient.get(key)||0)+required);
+  }
+  for(const [id,required] of requiredByIngredient){
+    const ingredient=(db.ingredients||[]).find(x=>String(x.id)===id);
+    if(!ingredient)return {ok:false,message:'Recipe ingredient missing'};
+    if(required>Number(ingredient.stock||0))
+      return {ok:false,message:ingredient.name+' stock insufficient'};
+  }
+  return {ok:true};
 }
 function addCart(id) {
   const m = db.menu.find(x => x.id === id);
@@ -198,6 +225,8 @@ function addCart(id) {
   if (alreadyInCart + 1 > available) {
     return toast(`Only ${available} ${m.name} available`);
   }
+  const ingredientCheck=ingredientStockCheck(m,alreadyInCart+1);
+  if(!ingredientCheck.ok)return toast(m.name+' OUT OF STOCK: '+ingredientCheck.message);
 
   if (f) f.qty++;
   else cart.push({ ...m, qty: 1 });
@@ -354,7 +383,94 @@ function addMenu(existing){openMenuEditor(existing||null)}function editMenu(id){
     alert('Could not complete product deletion. Check your connection.');
   }
 }
-function inventory(){return `<section class="panel"><div class="section-head"><h2>Stock & Reorder</h2><button class="primary" onclick="addStock()">+ Add stock item</button></div><div class="notice">Simple stock tracking is included. Ingredient-level recipe deduction and supplier purchase workflows can be added after the required stock units and recipes are defined.</div>${table(['Item','Category','On hand','Status','Update'],db.menu.map(m=>`<tr><td>${esc(m.name)}</td><td>${esc(m.category)}</td><td>${m.stock}</td><td><span class="badge ${m.stock<=5?'':'green'}">${m.stock<=5?'Low stock':'In stock'}</span></td><td><button class="btn" onclick="stockChange(${m.id})">Adjust</button></td></tr>`).join(''))}</section>`}function stockChange(id){let m=db.menu.find(x=>x.id===id),n=prompt('New stock quantity for '+m.name,m.stock);if(n!==null&&Number(n)>=0){m.stock=Number(n);save();render()}}function addStock(){let id=Number(prompt('Enter menu item ID to adjust: '+db.menu.map(m=>`${m.id}=${m.name}`).join(', ')));if(db.menu.some(m=>m.id===id))stockChange(id)}
+let ingredientReportStart = '';
+let ingredientReportEnd = '';
+
+function setIngredientReportDates(){
+  const start=document.getElementById('ingredientReportStart')?.value||'';
+  const end=document.getElementById('ingredientReportEnd')?.value||'';
+  if(!start||!end||start>end)return toast('Select a valid date range');
+  ingredientReportStart=start;
+  ingredientReportEnd=end;
+  render();
+}
+function downloadIngredientReport(){
+  const start=document.getElementById('ingredientReportStart')?.value||ingredientReportStart||today();
+  const end=document.getElementById('ingredientReportEnd')?.value||ingredientReportEnd||today();
+  if(!start||!end||start>end)return toast('Select a valid date range');
+  const password=sessionStorage.getItem('nitroPosPassword')||'';
+  fetch('/api/ingredient-report.xlsx?start='+encodeURIComponent(start)+'&end='+encodeURIComponent(end),{headers:{'x-pos-password':password}})
+    .then(async response=>{if(!response.ok){let d={};try{d=await response.json()}catch{}throw new Error(d.error||'Excel export failed')}return response.blob()})
+    .then(blob=>{const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='ingredient-report-'+start+'-to-'+end+'.xlsx';document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url)})
+    .catch(error=>toast(error.message||'Excel export failed'));
+}
+function ingredientsPage(){
+  if(!Array.isArray(db.ingredients))db.ingredients=[];
+  if(!Array.isArray(db.ingredientLedger))db.ingredientLedger=[];
+  const start=ingredientReportStart||today();
+  const end=ingredientReportEnd||today();
+  const ledger=db.ingredientLedger||[];
+  const inRange=x=>{const d=String(x.date||'').slice(0,10);return d>=start&&d<=end};
+  const rows=db.ingredients.map(i=>`<tr><td>${esc(i.name)}</td><td>${esc(i.unit)}</td><td>${Number(i.stock||0)}</td><td><button class="btn" onclick="ingredientPurchase(${i.id})">Purchase</button></td></tr>`).join('');
+  const recipes=(db.menu||[]).map(m=>{const r=Array.isArray(m.recipe)?m.recipe:[];const names=r.map(x=>{const i=(db.ingredients||[]).find(y=>y.id===x.ingredientId);return i?esc(i.name)+` (${x.qty} ${esc(i.unit)})`:''}).filter(Boolean).join(', ');return `<tr><td>${esc(m.name)}</td><td>${names||'Not set'}</td><td><button class="btn" onclick="editIngredientRecipe(${m.id})">Set Recipe</button></td></tr>`}).join('');
+  const days=[];const cursor=new Date(start+'T00:00:00Z');const last=new Date(end+'T00:00:00Z');
+  while(cursor<=last&&days.length<366){days.push(cursor.toISOString().slice(0,10));cursor.setUTCDate(cursor.getUTCDate()+1)}
+  const daily=[];
+  for(const i of db.ingredients){
+    const relevant=ledger.filter(x=>String(x.ingredientId)===String(i.id)&&String(x.date||'').slice(0,10)>=start);
+    let balance=Number(i.stock||0)-relevant.reduce((sum,x)=>{const t=String(x.type||'').toLowerCase(),q=Number(x.qty||0);return sum+(t.includes('usage')?-q:(t.includes('purchase')||t.includes('opening')||t.includes('reversal'))?q:0)},0);
+    for(const day of days){
+      const entries=relevant.filter(x=>String(x.date||'').slice(0,10)===day);
+      const sum=word=>entries.filter(x=>String(x.type||'').toLowerCase().includes(word)).reduce((a,x)=>a+Number(x.qty||0),0);
+      const opening=balance,openingAdded=sum('opening'),purchases=sum('purchase'),usage=sum('usage'),reversals=sum('reversal');
+      balance=opening+openingAdded+purchases-usage+reversals;
+      daily.push(`<tr><td>${day}</td><td>${esc(i.name)}</td><td>${esc(i.unit)}</td><td>${opening}</td><td>${openingAdded}</td><td>${purchases}</td><td>${usage}</td><td>${reversals}</td><td>${balance}</td></tr>`);
+    }
+  }
+  const history=ledger.filter(inRange).slice().reverse().map(x=>`<tr><td>${esc(x.date?new Date(x.date).toLocaleString():'')}</td><td>${esc(x.name||'')}</td><td>${esc(x.type||'')}</td><td>${Number(x.qty||0)} ${esc(x.unit||'')}</td><td>${esc(x.note||'')}</td></tr>`).join('');
+  return `<section class="panel"><div class="section-head"><h2>Ingredient Stock</h2><button class="primary" onclick="addIngredient()">+ Add Ingredient</button></div><div class="table-wrap">${table(['Ingredient','Unit','Available Stock','Purchase'],rows||'<tr><td colspan="4">No ingredients added yet.</td></tr>')}</div></section><section class="panel"><h2>Menu Item Recipes</h2><p class="notice">Set ingredient quantities required for each menu item.</p><div class="table-wrap">${table(['Menu Item','Recipe','Action'],recipes||'<tr><td colspan="3">No menu items available.</td></tr>')}</div></section><section class="panel"><h2>Ingredient Daily Report</h2><div class="section-head"><label>From <input id="ingredientReportStart" type="date" value="${start}"></label><label>To <input id="ingredientReportEnd" type="date" value="${end}"></label><button class="btn" onclick="setIngredientReportDates()">Apply Dates</button><button class="primary" onclick="downloadIngredientReport()">Download Excel</button></div><p class="notice">Daily opening, purchases, usage, cancellation reversals and closing stock.</p><div class="table-wrap">${table(['Date','Ingredient','Unit','Opening','Opening Added','Purchases','Usage','Cancellation Reversal','Closing'],daily.join('')||'<tr><td colspan="9">No report data.</td></tr>')}</div></section><section class="panel"><h2>Ingredient Stock History</h2><div class="table-wrap">${table(['Date','Ingredient','Type','Quantity','Supplier / Note'],history||'<tr><td colspan="5">No stock history in this date range.</td></tr>')}</div></section>`;
+}
+function addIngredient(){
+  if(!Array.isArray(db.ingredients))db.ingredients=[];
+  if(!Array.isArray(db.ingredientLedger))db.ingredientLedger=[];
+  const name=prompt('Ingredient name:');if(!name||!name.trim())return;
+  const units=['Piece','Pack','Bottle','Kg','Gram','Litre','Millilitre'];
+  const choice=prompt('Select Unit:\n1. Piece\n2. Pack\n3. Bottle\n4. Kg\n5. Gram\n6. Litre\n7. Millilitre','4');
+  if(choice===null)return;
+  const unit=units[Number(choice)-1];
+  if(!unit||!(/^[1-7]$/.test(choice.trim())))return toast('Select a valid unit (1-7)');
+  const stock=Number(prompt('Opening stock quantity:','0'));if(!Number.isFinite(stock)||stock<0)return toast('Enter a valid quantity');
+  const id=Date.now();
+  db.ingredients.push({id,name:name.trim(),unit:unit.trim(),stock});
+  if(stock>0)db.ingredientLedger.push({id:Date.now()+1,ingredientId:id,name:name.trim(),type:'Opening Stock',qty:stock,unit:unit.trim(),date:new Date().toISOString(),note:'Opening balance'});
+  save();render();
+}
+function editIngredientRecipe(menuId){
+  const menu=(db.menu||[]).find(m=>m.id===menuId);if(!menu)return;
+  const ingredients=db.ingredients||[];
+  if(!ingredients.length)return toast('Add ingredients first');
+  const choices=ingredients.map(i=>i.id+' = '+i.name+' ('+i.unit+')').join('\n');
+  const recipe=[];
+  while(true){
+    const raw=prompt('Enter ingredient ID. Leave blank to finish:\n'+choices,'');
+    if(raw===null)return;
+    if(!raw.trim())break;
+    const ingredient=ingredients.find(i=>String(i.id)===raw.trim());
+    if(!ingredient){alert('Invalid ingredient ID');continue}
+    const qty=Number(prompt('Quantity of '+ingredient.name+' per menu item ('+ingredient.unit+'):',''));
+    if(!Number.isFinite(qty)||qty<=0){alert('Enter a valid quantity');continue}
+    recipe.push({ingredientId:ingredient.id,qty});
+  }
+  menu.recipe=recipe;save();render();
+}
+function ingredientPurchase(id){
+  const item=(db.ingredients||[]).find(x=>x.id===id);if(!item)return;
+  const qty=Number(prompt('Purchase quantity ('+item.unit+'):',''));if(!Number.isFinite(qty)||qty<=0)return toast('Enter a valid purchase quantity');
+  const supplier=prompt('Supplier name / note:','')||'';
+  item.stock=Number(item.stock||0)+qty;
+  db.ingredientLedger.push({id:Date.now(),ingredientId:id,name:item.name,type:'Purchase',qty,unit:item.unit,date:new Date().toISOString(),note:supplier});
+  save();render();
+}function inventory(){return `<section class="panel"><div class="section-head"><h2>Stock & Reorder</h2><button class="primary" onclick="addStock()">+ Add stock item</button></div><div class="notice">Simple stock tracking is included. Ingredient-level recipe deduction and supplier purchase workflows can be added after the required stock units and recipes are defined.</div>${table(['Item','Category','On hand','Status','Update'],db.menu.map(m=>`<tr><td>${esc(m.name)}</td><td>${esc(m.category)}</td><td>${m.stock}</td><td><span class="badge ${m.stock<=5?'':'green'}">${m.stock<=5?'Low stock':'In stock'}</span></td><td><button class="btn" onclick="stockChange(${m.id})">Adjust</button></td></tr>`).join(''))}</section>`}function stockChange(id){let m=db.menu.find(x=>x.id===id),n=prompt('New stock quantity for '+m.name,m.stock);if(n!==null&&Number(n)>=0){m.stock=Number(n);save();render()}}function addStock(){let id=Number(prompt('Enter menu item ID to adjust: '+db.menu.map(m=>`${m.id}=${m.name}`).join(', ')));if(db.menu.some(m=>m.id===id))stockChange(id)}
 function customers(){return `<section class="panel"><div class="section-head"><h2>Customer Directory</h2><button class="btn" onclick="exportCsv('customers')">Export CSV</button></div>${table(['Customer','Mobile','Visits','Sales total'],db.customers.map(c=>`<tr><td>${esc(c.name)}</td><td>${esc(c.phone)}</td><td>${c.visits}</td><td>${money(c.total)}</td></tr>`).join(''))}</section>`}function setReportDate(value){reportDate=value||today();render()}
 function reports(){
   if(!reportDate)reportDate=today();
@@ -577,7 +693,7 @@ function settings(){return `<section class="panel"><h2>Restaurant Settings</h2><
  <script>window.onload=()=>window.print()<\/script></body></html>`);
  w.document.close()
 }
-function render(){let html=({dashboard,pos,kitchen,menu:menuPage,inventory,customers,reports,sales,cancelled,expenses,staff,settings})[page]();$('#content').innerHTML=html;if(page==='pos')renderMenuCards();$('#shopBrand').textContent=db.settings.name.toUpperCase()}function resetData(){
+function render(){let html=({dashboard,pos,kitchen,menu:menuPage,inventory,ingredients:ingredientsPage,customers,reports,sales,cancelled,expenses,staff,settings})[page]();$('#content').innerHTML=html;if(page==='pos')renderMenuCards();$('#shopBrand').textContent=db.settings.name.toUpperCase()}function resetData(){
  if(!confirm('Clear all recorded sales, expenses and customer history? Menu items, prices, settings and staff will be kept. Export a backup first.'))return;
  db.orders=[];db.expenses=[];db.customers=[];db.next=1001;save();render();toast('Sales, expenses and customer history cleared.');
 }
