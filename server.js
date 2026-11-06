@@ -40,13 +40,34 @@ function configured() {
   );
 }
 
+app.get('/api/whatsapp/webhook', (req, res) => {
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+  const expected = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN;
+
+  if (mode === 'subscribe' && expected && token === expected) {
+    return res.status(200).send(challenge);
+  }
+  return res.sendStatus(403);
+});
+
+app.post('/api/whatsapp/webhook', (req, res) => {
+  if (req.body?.object === 'whatsapp_business_account') {
+    console.log('WhatsApp webhook event received.');
+  }
+  return res.sendStatus(200);
+});
+
 app.get('/api/health', (_req, res) => {
   res.json({
     ok: true,
     service: 'NITRO CAFÃ‰ POS',
     sharedSync: true,
     passwordConfigured: configured(),
-    databaseConfigured: !!supabase
+    databaseConfigured: !!supabase,
+    whatsappConfigured: config().configured,
+    missingConfiguration: config().missing
   });
 });
 
