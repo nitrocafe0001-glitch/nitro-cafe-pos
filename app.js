@@ -330,7 +330,7 @@ return `<section class="panel"><div class="section-head"><div><h2>Kitchen Manage
 function menuPage(){return `<section class="panel"><div class="section-head"><div><h2>Menu Items (${db.menu.length})</h2><small>Add, edit, upload photos or remove menu items</small></div><button class="primary" onclick="openMenuEditor()">+ Add item</button></div><div class="row menu-tools"><input id="manageMenuSearch" placeholder="Search menu items\u2026" oninput="filterManageMenu()" style="max-width:320px"><select id="manageMenuCategory" onchange="filterManageMenu()" style="max-width:220px"><option value="All">All categories</option>${[...new Set(db.menu.map(m=>m.category))].map(c=>`<option>${esc(c)}</option>`).join('')}</select></div><div id="manageMenuTable">${menuTable()}</div></section><div id="menuEditorRoot"></div>`}
 function menuTable(list=db.menu){return table(['Photo','Item','Category','Price','Stock','Actions'],list.map(m=>`<tr><td><img class="mini-food-photo" src="${esc(m.photo||'food-placeholder.svg')}" alt="${esc(m.name)}" onerror="this.onerror=null;this.src='food-placeholder.svg'"></td><td><b>${esc(m.name)}</b></td><td>${esc(m.category)}</td><td>${money(m.price)}</td><td>${Number(m.stock)||0}</td><td><div class="actions"><button class="btn" onclick="editMenu(${m.id})">Edit</button><button class="btn danger" onclick="deleteMenu(${m.id})">Delete</button></div></td></tr>`).join(''))}
 function filterManageMenu(){let q=($('#manageMenuSearch')?.value||'').toLowerCase(),c=$('#manageMenuCategory')?.value||'All';$('#manageMenuTable').innerHTML=menuTable(db.menu.filter(m=>(c==='All'||m.category===c)&&m.name.toLowerCase().includes(q)))}
-function openMenuEditor(existing){let m=existing||null;$('#menuEditorRoot').innerHTML=`<div class="editor-backdrop" onclick="if(event.target===this)closeMenuEditor()"><section class="editor-panel"><div class="section-head"><div><h2>${m?'Edit menu item':'Add new menu item'}</h2><small>Update item details and food photo</small></div><button class="btn" onclick="closeMenuEditor()">×</button></div><form id="menuEditorForm" onsubmit="saveMenuEditor(event,${m?m.id:'null'})"><div class="formgrid"><div class="field"><label>Item name *</label><input id="edName" required maxlength="90" value="${esc(m?.name||'')}"></div><div class="field"><label>Price (\u20B9) *</label><input id="edPrice" type="number" required min="0" step=".01" value="${m?.price??''}"></div><div class="field"><label>Category *</label><input id="edCategory" list="menuCategories" required value="${esc(m?.category||'Hotdogs')}"><datalist id="menuCategories">${[...new Set([...db.menu.map(x=>x.category),'Hotdogs','Fries','Wings','Burgers','Juices','Ice Tea','Boba','Hot Drinks','Momos','Combo Offers','Sides'])].map(c=>`<option value="${esc(c)}">`).join('')}</datalist></div><div class="field"><label>Stock quantity</label><input id="edStock" type="number" min="0" step="1" value="${m?.stock??50}"></div></div><div class="field" style="margin-top:12px"><label>Photo URL (paste a direct image URL)</label><input id="edPhotoUrl" type="url" placeholder="https://\u2026" value="${esc(m?.photo||'')}" oninput="previewMenuPhoto(this.value)"></div><div class="field" style="margin-top:12px"><label>Or upload photo from your device</label><input id="edPhotoFile" type="file" accept="image/*" onchange="uploadMenuPhoto(this)"><small>Image will be resized and saved in this browser.</small></div><img id="edPhotoPreview" class="editor-preview" src="${esc(m?.photo||'food-placeholder.svg')}" alt="Food photo preview" onerror="this.src='food-placeholder.svg'"><input type="hidden" id="edPhotoData" value=""><div class="actions" style="margin-top:16px;justify-content:flex-end"><button type="button" class="btn" onclick="closeMenuEditor()">Cancel</button><button type="submit" class="primary">Save menu item</button></div></form></section></div>`}
+function openMenuEditor(existing){let m=existing||null;$('#menuEditorRoot').innerHTML=`<div class="editor-backdrop" onclick="if(event.target===this)closeMenuEditor()"><section class="editor-panel"><div class="section-head"><div><h2>${m?'Edit menu item':'Add new menu item'}</h2><small>Update item details and food photo</small></div><button class="btn" onclick="closeMenuEditor()">×</button></div><form id="menuEditorForm" onsubmit="saveMenuEditor(event,${m?m.id:'null'})"><div class="formgrid"><div class="field"><label>Item name *</label><input id="edName" required maxlength="90" value="${esc(m?.name||'')}"></div><div class="field"><label>Price (\u20B9) *</label><input id="edPrice" type="number" required min="0" step=".01" value="${m?.price??''}"></div><div class="field"><label>Category *</label><input id="edCategory" list="menuCategories" required value="${esc(m?.category||'Hotdogs')}"><datalist id="menuCategories">${[...new Set([...db.menu.map(x=>x.category),'Hotdogs','Fries','Wings','Burgers','Juices','Ice Tea','Boba','Hot Drinks','Momos','Combo Offers','Sides'])].map(c=>`<option value="${esc(c)}">`).join('')}</datalist></div><div class="field"><label>Stock quantity</label><input id="edStock" type="number" min="0" step="1" value="${m?.stock??50}"></div></div><div class="field" style="margin-top:12px"><label>Photo URL (paste a direct image URL)</label><input id="edPhotoUrl" type="text" placeholder="https://\u2026" value="${esc(m?.photo||'')}" oninput="previewMenuPhoto(this.value)"></div><div class="field" style="margin-top:12px"><label>Or upload photo from your device</label><input id="edPhotoFile" type="file" accept="image/*" onchange="uploadMenuPhoto(this)"><small>Image will be resized and saved in this browser.</small></div><img id="edPhotoPreview" class="editor-preview" src="${esc(m?.photo||'food-placeholder.svg')}" alt="Food photo preview" onerror="this.src='food-placeholder.svg'"><input type="hidden" id="edPhotoData" value=""><div class="actions" style="margin-top:16px;justify-content:flex-end"><button type="button" class="btn" onclick="closeMenuEditor()">Cancel</button><button type="submit" class="primary">Save menu item</button></div></form></section></div>`}
 function previewMenuPhoto(url){if(url&&/^https?:\/\//i.test(url)){$('#edPhotoPreview').src=url;$('#edPhotoData').value=''}}
 function uploadMenuPhoto(input){let file=input.files?.[0];if(!file)return;if(!file.type.startsWith('image/'))return toast('Please choose an image file.');let reader=new FileReader();reader.onload=()=>{let img=new Image();img.onload=()=>{let scale=Math.min(1,1100/Math.max(img.width,img.height)),canvas=document.createElement('canvas');canvas.width=Math.round(img.width*scale);canvas.height=Math.round(img.height*scale);canvas.getContext('2d').drawImage(img,0,0,canvas.width,canvas.height);let data=canvas.toDataURL('image/jpeg',.78);$('#edPhotoData').value=data;$('#edPhotoPreview').src=data;$('#edPhotoUrl').value=''};img.onerror=()=>toast('Could not read this image.');img.src=reader.result};reader.readAsDataURL(file)}
 function saveMenuEditor(e,id){
@@ -420,8 +420,8 @@ function ingredientsPage(){
   const end=ingredientReportEnd||today();
   const ledger=db.ingredientLedger||[];
   const inRange=x=>{const d=String(x.date||'').slice(0,10);return d>=start&&d<=end};
-  const rows=db.ingredients.filter(i=>!i.archived).map(i=>`<tr><td>${esc(i.name)}</td><td>${esc(i.unit)}</td><td>${Number(i.stock||0)}</td><td><button class="btn" onclick="ingredientPurchase(${i.id})">Purchase</button></td><td><button class="btn" onclick="deleteIngredient(${i.id})">Delete</button></td></tr>`).join('');
-  const recipes=(db.menu||[]).map(m=>{const r=Array.isArray(m.recipe)?m.recipe:[];const names=r.map(x=>{const i=(db.ingredients||[]).find(y=>y.id===x.ingredientId);return i?esc(i.name)+` (${x.qty} ${esc(i.unit)})`:''}).filter(Boolean).join(', ');return `<tr><td>${esc(m.name)}</td><td>${names||'Not set'}</td><td><button class="btn" onclick="editIngredientRecipe(${m.id})">Set Recipe</button> ${r.length?`<button class="btn" onclick="deleteIngredientRecipe(${m.id})">Delete</button>`:''}</td></tr>`}).join('');
+  const rows=db.ingredients.filter(i=>!i.archived).map(i=>`<tr><td>${esc(i.name)}</td><td>${esc(i.unit)}</td><td>${Number(i.stock||0)}</td><td><button class="btn" onclick="editIngredient(${i.id})">Edit</button> <button class="btn" onclick="ingredientPurchase(${i.id})">Purchase</button></td><td><button class="btn" onclick="deleteIngredient(${i.id})">Delete</button></td></tr>`).join('');
+  const recipes=(db.menu||[]).map(m=>{const r=Array.isArray(m.recipe)?m.recipe:[];const names=r.map(x=>{const i=(db.ingredients||[]).find(y=>y.id===x.ingredientId);return i?esc(i.name)+` (${x.qty} ${esc(i.unit)})`:''}).filter(Boolean).join(', ');return `<tr><td>${esc(m.name)}</td><td>${names||'Not set'}</td><td><button class="btn" onclick="editIngredientRecipe(${m.id})">Set Recipe</button> <button class="btn" onclick="editIngredientRecipe(${m.id})">Edit</button> ${r.length?`<button class="btn" onclick="deleteIngredientRecipe(${m.id})">Delete</button>`:''}</td></tr>`}).join('');
   const days=[];const cursor=new Date(start+'T00:00:00Z');const last=new Date(end+'T00:00:00Z');
   while(cursor<=last&&days.length<366){days.push(cursor.toISOString().slice(0,10));cursor.setUTCDate(cursor.getUTCDate()+1)}
   const daily=[];
@@ -454,7 +454,29 @@ function addIngredient(){
   if(stock>0)db.ingredientLedger.push({id:Date.now()+1,ingredientId:id,name:name.trim(),type:'Opening Stock',qty:stock,unit:unit.trim(),date:new Date().toISOString(),note:'Opening balance'});
   save();render();
 }
-function deleteIngredient(id){
+function editIngredient(id){
+  const item=(db.ingredients||[]).find(i=>String(i.id)===String(id));
+  if(!item||item.archived)return;
+  const name=prompt('Ingredient name:',item.name);
+  if(name===null||!name.trim())return;
+  const units=['Piece','Pack','Bottle','Kg','Gram','Litre','Millilitre'];
+  const current=units.indexOf(item.unit);
+  const choice=prompt('Select Unit:\n1. Piece\n2. Pack\n3. Bottle\n4. Kg\n5. Gram\n6. Litre\n7. Millilitre',String(current>=0?current+1:1));
+  if(choice===null)return;
+  const unit=units[Number(choice)-1];
+  if(!unit||!/^[1-7]$/.test(choice.trim()))return toast('Select a valid unit (1-7)');
+  const stock=Number(prompt('Available stock quantity:',String(item.stock||0)));
+  if(!Number.isFinite(stock)||stock<0)return toast('Enter a valid quantity');
+  const oldName=item.name,oldUnit=item.unit;
+  item.name=name.trim();item.unit=unit;item.stock=stock;
+  (db.ingredientLedger||[]).forEach(x=>{
+    if(String(x.ingredientId)===String(id)){
+      if(x.name===oldName)x.name=item.name;
+      if(x.unit===oldUnit)x.unit=item.unit;
+    }
+  });
+  save();render();toast('Ingredient updated.');
+}function deleteIngredient(id){
   const item=(db.ingredients||[]).find(i=>i.id===id);
   if(!item||item.archived)return;
   if(!confirm('Delete '+item.name+'? Its old stock history will be preserved and its recipe mapping will be removed.'))return;
@@ -487,25 +509,25 @@ function deleteIngredientRecipe(menuId){
   save();render();toast('Recipe deleted. Menu item preserved.');
 }
 function editIngredientRecipe(menuId){
-  const menu=(db.menu||[]).find(m=>m.id===menuId);if(!menu)return;
+  const menu=(db.menu||[]).find(m=>String(m.id)===String(menuId));if(!menu)return;
   const ingredients=(db.ingredients||[]).filter(i=>!i.archived);
   if(!ingredients.length)return toast('Add ingredients first');
-  const choices=ingredients.map(i=>i.name+' ('+i.unit+')').join('\n');
   const recipe=[];
   while(true){
-    const raw=prompt('Enter ingredient NAME. Leave blank to finish:\n'+choices,'');
+    const choices=ingredients.map((i,index)=>(index+1)+'. '+i.name+' ('+i.unit+')').join('\n');
+    const raw=prompt('Enter ingredient NUMBER. Leave blank to finish:\n'+choices,'');
     if(raw===null)return;
     if(!raw.trim())break;
-    const ingredient=ingredients.find(i=>i.name.trim().toLowerCase()===raw.trim().toLowerCase());
-    if(!ingredient){alert('Ingredient name not found. Please enter a name from the list.');continue}
+    if(!/^\d+$/.test(raw.trim())){alert('Enter a valid ingredient number.');continue}
+    const ingredient=ingredients[Number(raw.trim())-1];
+    if(!ingredient){alert('Ingredient number not found.');continue}
     if(recipe.some(r=>String(r.ingredientId)===String(ingredient.id))){alert('This ingredient is already added.');continue}
     const qty=Number(prompt('Quantity of '+ingredient.name+' per menu item ('+ingredient.unit+'):',''));
     if(!Number.isFinite(qty)||qty<=0){alert('Enter a valid quantity');continue}
     recipe.push({ingredientId:ingredient.id,qty});
   }
-  menu.recipe=recipe;save();render();
-}
-function ingredientPurchase(id){
+  menu.recipe=recipe;save();render();toast('Recipe saved.');
+}function ingredientPurchase(id){
   const item=(db.ingredients||[]).find(x=>x.id===id);if(!item)return;
   const qty=Number(prompt('Purchase quantity ('+item.unit+'):',''));if(!Number.isFinite(qty)||qty<=0)return toast('Enter a valid purchase quantity');
   const supplier=prompt('Supplier name / note:','')||'';
