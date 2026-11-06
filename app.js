@@ -760,6 +760,7 @@ window.editIngredientRecipe=editIngredientRecipe;
 window.deleteIngredientRecipe=deleteIngredientRecipe;
 window.ingredientPurchase=ingredientPurchase;
 window.deleteIngredientPurchase=deleteIngredientPurchase;
+window.editIngredient=editIngredient;
 window.addIngredient=addIngredient;
 window.deleteIngredient=deleteIngredient;
 window.addExpense=addExpense;
