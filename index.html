@@ -2,7 +2,7 @@
 <div id="loginGate" style="position:fixed;inset:0;background:#101827;z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px">
  <form id="loginForm" style="background:#fff;color:#172235;padding:28px;border-radius:16px;width:min(100%,380px);box-shadow:0 20px 60px #0005">
   <h2 style="margin:0 0 8px">NITRO CAF&#xC9;</h2><p style="color:#596579;margin:0 0 20px">Sign in to access shared live sales and menu data.</p>
-  <label for="posPassword">Shared login password</label><input id="posPassword" type="password" required minlength="8" autocomplete="current-password" style="width:100%;padding:13px;margin:8px 0 14px;border:1px solid #ccd2dc;border-radius:8px">
+  <label for="posPassword">Shared login password</label><div style="display:flex;gap:8px;align-items:center;margin:8px 0 14px"><input id="posPassword" type="password" required minlength="8" autocomplete="current-password" style="flex:1;min-width:0;padding:13px;border:1px solid #ccd2dc;border-radius:8px"><button type="button" id="togglePassword" aria-label="Show password" aria-pressed="false" style="padding:13px;border:1px solid #ccd2dc;border-radius:8px;background:#fff;color:#172235">Show</button></div>
   <button type="submit" style="width:100%;padding:13px;border:0;border-radius:8px;background:#172235;color:#fff;font-weight:700">Login</button>
   <p id="loginError" style="color:#b42318;font-size:13px"></p>
  </form>
@@ -10,6 +10,8 @@
 <script>
 (async()=>{
  const gate=document.getElementById('loginGate'),form=document.getElementById('loginForm'),err=document.getElementById('loginError');
+ const passwordInput=document.getElementById('posPassword'),togglePassword=document.getElementById('togglePassword');
+ togglePassword.addEventListener('click',()=>{const show=passwordInput.type==='password';passwordInput.type=show?'text':'password';togglePassword.textContent=show?'Hide':'Show';togglePassword.setAttribute('aria-label',show?'Hide password':'Show password');togglePassword.setAttribute('aria-pressed',String(show))});
  async function start(password){
   const r=await fetch('/api/shared-data',{headers:{'x-pos-password':password}});
   if(!r.ok)throw new Error('Login failed or shared sync is not configured.');
