@@ -62,7 +62,7 @@ if((Number(db.menuVersion)||0)<3){
 }
 db.menu.forEach(m=>{m.emoji='';if(!m.photo)m.photo=photoFor(m.name,m.category)});
 localStorage.nitrocafepos=JSON.stringify(db);
-if(lastRemote && JSON.stringify(db)!==lastRemote)save();
+
 let settingsUnlocked=false,pendingSettingsToken='';let cart=[],payment='Cash',orderType='Takeaway',page='dashboard',reportDate='',kitchenDate='',dashboardDate='',salesDate='',expensesDate='',cancelledDate='';function save(){
  const snapshot=JSON.stringify(db);localStorage.nitrocafepos=snapshot;
  if(remoteApplying)return;
@@ -76,7 +76,7 @@ let settingsUnlocked=false,pendingSettingsToken='';let cart=[],payment='Cash',or
   remoteVersion=Number(result.version)||remoteVersion;
   lastRemote=JSON.stringify(result.data||JSON.parse(snapshot));
  }).catch(e=>{if(typeof toast==='function')toast(e.message||'Server sync failed. Check internet connection.')});
-}function toast(t){$('#toast').textContent=t;$('#toast').classList.add('show');setTimeout(()=>$('#toast').classList.remove('show'),2800)}async function requestSettingsOtp(){
+}if(lastRemote && JSON.stringify(db)!==lastRemote)save();function toast(t){$('#toast').textContent=t;$('#toast').classList.add('show');setTimeout(()=>$('#toast').classList.remove('show'),2800)}async function requestSettingsOtp(){
  try{
   const r=await fetch('/api/settings/request-otp',{method:'POST',headers:authHeaders});
   const d=await r.json().catch(()=>({}));
